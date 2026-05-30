@@ -27,6 +27,7 @@ pub struct DevToolApp {
     pub gif_player:           Option<GifPlayer>,
     pub busy_label:           String,
     pub cancel_flag:          Arc<AtomicBool>,
+    pub progress:             Arc<Mutex<f32>>,
 
     // Package pre-flight
     pub show_package_config:  bool,
@@ -81,6 +82,7 @@ impl DevToolApp {
             gif_player,
             busy_label:  String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            progress:    Arc::new(Mutex::new(0.0_f32)),
             show_package_config:  false,
             pack_name_input:      String::new(),
             exe_name_input:       String::new(),
@@ -170,8 +172,9 @@ impl DevToolApp {
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
+        let progress      = Arc::clone(&self.progress);
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, status_clone, pending_clone, cancel)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, status_clone, pending_clone, cancel, progress)
         });
     }
 
@@ -197,6 +200,7 @@ impl DevToolApp {
         let token_path  = gdrive_token_path().unwrap_or_default();
         let status      = Arc::clone(&self.status_message);
         let cancel      = Arc::clone(&self.cancel_flag);
+        let progress    = Arc::clone(&self.progress);
 
         self.show_upload_panel = false;
         self.busy_label = "◈  UPLOADING BUILD  ◈".into();
@@ -206,13 +210,17 @@ impl DevToolApp {
             let mut parts = Vec::new();
             if use_local {
                 if cancel.load(Ordering::Relaxed) { return "[CANCELLED]".to_string(); }
+                *progress.lock().unwrap() = 0.2;
                 parts.push(ops_package::copy_to_local(&zip, &local_path));
+                *progress.lock().unwrap() = if use_gdrive { 0.5 } else { 1.0 };
             }
             if use_gdrive {
                 if cancel.load(Ordering::Relaxed) { return "[CANCELLED]".to_string(); }
+                *progress.lock().unwrap() = if use_local { 0.5 } else { 0.1 };
                 parts.push(ops_package::upload_to_gdrive_oauth(
                     &zip, &folder_id, &secret_path, &token_path, &status,
                 ));
+                *progress.lock().unwrap() = 1.0;
             }
             if parts.is_empty() { return "[DONE] No destination selected — nothing uploaded.".to_string(); }
             parts.join("\n")
@@ -252,8 +260,9 @@ impl DevToolApp {
         if let Some(g) = &mut self.gif_player { g.reset(); }
         let status_clone = Arc::clone(&self.status_message);
         let cancel       = Arc::clone(&self.cancel_flag);
+        let progress     = Arc::clone(&self.progress);
         self.run_background_task("Preparing to regenerate project files…", move || {
-            ops_vs::rebuild_vs_files(project_path, engine_dir, ide, status_clone, cancel)
+            ops_vs::rebuild_vs_files(project_path, engine_dir, ide, status_clone, cancel, progress)
         });
     }
 
@@ -279,22 +288,24 @@ impl DevToolApp {
         self.git_next_state = GitState::AfterPush;
         self.busy_label     = "◈  COMMITTING & PUSHING  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        let cancel = Arc::clone(&self.cancel_flag);
+        let cancel   = Arc::clone(&self.cancel_flag);
+        let progress = Arc::clone(&self.progress);
         self.run_background_task("Staging changes…", move || {
-            ops_git::task_git_commit_push(dir, msg, branch, status, result, cancel)
+            ops_git::task_git_commit_push(dir, msg, branch, status, result, cancel, progress)
         });
     }
 
     pub fn git_start_sync(&mut self) {
-        let dir    = match self.git_project_dir() { Some(d) => d, None => return };
-        let status = Arc::clone(&self.status_message);
-        let result = Arc::clone(&self.git_result);
-        let cancel = Arc::clone(&self.cancel_flag);
+        let dir      = match self.git_project_dir() { Some(d) => d, None => return };
+        let status   = Arc::clone(&self.status_message);
+        let result   = Arc::clone(&self.git_result);
+        let cancel   = Arc::clone(&self.cancel_flag);
+        let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
         self.busy_label     = "◈  SYNCING WITH MAIN  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Fetching origin/main…", move || {
-            ops_git::task_git_sync(dir, status, result, cancel)
+            ops_git::task_git_sync(dir, status, result, cancel, progress)
         });
     }
 
@@ -304,38 +315,41 @@ impl DevToolApp {
         let status      = Arc::clone(&self.status_message);
         let result      = Arc::clone(&self.git_result);
         let cancel      = Arc::clone(&self.cancel_flag);
+        let progress    = Arc::clone(&self.progress);
         self.git_merged_from = from_branch.clone();
         self.git_next_state  = GitState::AfterMerge;
         self.busy_label      = "◈  MERGING TO MAIN  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Switching to main…", move || {
-            ops_git::task_git_merge_to_main(dir, from_branch, status, result, cancel)
+            ops_git::task_git_merge_to_main(dir, from_branch, status, result, cancel, progress)
         });
     }
 
     pub fn git_start_checkout(&mut self, branch: String) {
-        let dir    = match self.git_project_dir() { Some(d) => d, None => return };
-        let status = Arc::clone(&self.status_message);
-        let result = Arc::clone(&self.git_result);
-        let cancel = Arc::clone(&self.cancel_flag);
+        let dir      = match self.git_project_dir() { Some(d) => d, None => return };
+        let status   = Arc::clone(&self.status_message);
+        let result   = Arc::clone(&self.git_result);
+        let cancel   = Arc::clone(&self.cancel_flag);
+        let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
         self.busy_label     = "◈  SWITCHING BRANCH  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Switching branch…", move || {
-            ops_git::task_git_checkout(dir, branch, status, result, cancel)
+            ops_git::task_git_checkout(dir, branch, status, result, cancel, progress)
         });
     }
 
     pub fn git_start_new_branch(&mut self, name: String) {
-        let dir    = match self.git_project_dir() { Some(d) => d, None => return };
-        let status = Arc::clone(&self.status_message);
-        let result = Arc::clone(&self.git_result);
-        let cancel = Arc::clone(&self.cancel_flag);
+        let dir      = match self.git_project_dir() { Some(d) => d, None => return };
+        let status   = Arc::clone(&self.status_message);
+        let result   = Arc::clone(&self.git_result);
+        let cancel   = Arc::clone(&self.cancel_flag);
+        let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
         self.busy_label     = "◈  CREATING BRANCH  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Creating branch…", move || {
-            ops_git::task_git_create_branch(dir, name, status, result, cancel)
+            ops_git::task_git_create_branch(dir, name, status, result, cancel, progress)
         });
     }
 
@@ -346,6 +360,7 @@ impl DevToolApp {
         F: FnOnce() -> String + Send + 'static,
     {
         self.cancel_flag.store(false, Ordering::Relaxed);
+        *self.progress.lock().unwrap()       = 0.0;
         *self.is_working.lock().unwrap()     = true;
         *self.status_message.lock().unwrap() = start_msg.to_string();
         let status  = Arc::clone(&self.status_message);

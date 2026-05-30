@@ -11,8 +11,10 @@ pub fn rebuild_vs_files(
     ide:      IdeChoice,
     status:   Arc<Mutex<String>>,
     cancel:   Arc<AtomicBool>,
+    progress: Arc<Mutex<f32>>,
 ) -> String {
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
     macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
         return "[CANCELLED] Operation was cancelled.".to_string();
     }}; }
@@ -26,13 +28,16 @@ pub fn rebuild_vs_files(
     const CLEAN_DIRS: &[&str] = &[
         "Binaries", "Intermediate", "Saved", ".idea", ".vs", "DerivedDataCache",
     ];
+    prog!(0.02);
     upd!("[1/3] Cleaning generated files…");
-    for name in CLEAN_DIRS {
+    let total_clean = CLEAN_DIRS.len() as f32;
+    for (i, name) in CLEAN_DIRS.iter().enumerate() {
         let p = project_dir.join(name);
         if p.exists() {
             upd!(format!("[1/3] Removing {}…", name));
             let _ = fs::remove_dir_all(&p);
         }
+        prog!(0.02 + (i as f32 + 1.0) / total_clean * 0.23);
     }
     if let Ok(entries) = fs::read_dir(&project_dir) {
         for entry in entries.flatten() {
@@ -86,6 +91,7 @@ pub fn rebuild_vs_files(
         Err(e) => return format!("[ERROR] Launch failed: {}", e),
     };
 
+    prog!(0.30);
     let gen_exit = loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = gen_child.kill();
@@ -94,8 +100,12 @@ pub fn rebuild_vs_files(
         }
         match gen_child.try_wait() {
             Ok(Some(s)) => break s,
-            Ok(None)    => std::thread::sleep(Duration::from_millis(300)),
-            Err(e)      => return format!("[ERROR] Waiting for generator: {}", e),
+            Ok(None)    => {
+                let cur = *progress.lock().unwrap();
+                *progress.lock().unwrap() = cur + (0.88 - cur) * 0.01;
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            Err(e) => return format!("[ERROR] Waiting for generator: {}", e),
         }
     };
     if !gen_exit.success() {
@@ -105,6 +115,7 @@ pub fn rebuild_vs_files(
             log_path.display()
         );
     }
+    prog!(0.90);
 
     // ── Step 3: open IDE ──────────────────────────────────────────────────────
     let sln = find_sln(&project_dir);
@@ -125,8 +136,8 @@ pub fn rebuild_vs_files(
         }
     }
 
-    // Clean up the log — it's only useful on failure, which is handled above
     let _ = fs::remove_file(&log_path);
+    prog!(1.0);
 
     match sln {
         Some(p) => format!("[DONE] Project files rebuilt.\nSolution → {}", p.display()),

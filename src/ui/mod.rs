@@ -101,7 +101,17 @@ impl DevToolApp {
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {
             ui.label(egui::RichText::new(&self.busy_label).size(15.0).color(MIKU_TEAL));
-            ui.add_space(2.0);
+            ui.add_space(6.0);
+
+            let prog = *self.progress.lock().unwrap();
+            ui.add(
+                egui::ProgressBar::new(prog)
+                    .desired_width(ui.available_width().min(340.0))
+                    .fill(MIKU_TEAL)
+                    .show_percentage(),
+            );
+
+            ui.add_space(4.0);
             ui.label(egui::RichText::new("see Status / Output below for progress")
                 .size(11.0).color(HINT_GRAY));
             ui.add_space(8.0);

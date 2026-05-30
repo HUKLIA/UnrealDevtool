@@ -12,8 +12,10 @@ pub fn package_game(
     status:      Arc<Mutex<String>>,
     pending_zip: Arc<Mutex<Option<PathBuf>>>,
     cancel:      Arc<AtomicBool>,
+    progress:    Arc<Mutex<f32>>,
 ) -> String {
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
     macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
         return "[CANCELLED] Packaging was cancelled.".to_string();
     }}; }
@@ -28,10 +30,12 @@ pub fn package_game(
     let version_dir = build_dir.join(&version_str);
     let log_path    = version_dir.join("BuildLog.txt");
 
+    prog!(0.02);
     upd!(format!("[1/5] Creating output directory…\n→ {}", version_dir.display()));
     if let Err(e) = fs::create_dir_all(&version_dir) {
         return format!("[ERROR] mkdir: {}", e);
     }
+    prog!(0.05);
 
     check!();
     let runuat = engine.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
@@ -63,6 +67,7 @@ pub fn package_game(
         Err(e) => return format!("[ERROR] UAT launch: {}", e),
     };
 
+    prog!(0.08); // UAT creep starts here
     let uat_exit = loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = uat_child.kill();
@@ -71,8 +76,12 @@ pub fn package_game(
         }
         match uat_child.try_wait() {
             Ok(Some(s)) => break s,
-            Ok(None)    => std::thread::sleep(Duration::from_millis(300)),
-            Err(e)      => return format!("[ERROR] Waiting for UAT: {}", e),
+            Ok(None)    => {
+                let cur = *progress.lock().unwrap();
+                *progress.lock().unwrap() = cur + (0.78 - cur) * 0.008;
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            Err(e) => return format!("[ERROR] Waiting for UAT: {}", e),
         }
     };
     if !uat_exit.success() {
@@ -82,6 +91,7 @@ pub fn package_game(
             log_path.display()
         );
     }
+    prog!(0.80);
 
     // UAT places the packaged game in <archivedirectory>/Windows/ for Win64
     let uat_windows = version_dir.join("Windows");
@@ -103,6 +113,7 @@ pub fn package_game(
         target
     };
 
+    prog!(0.85);
     upd!("[4/5] Renaming executable…");
     if let Some(found) = find_main_exe(&package_dir) {
         let target_exe = package_dir.join(format!("{}.exe", exe_name));
@@ -128,6 +139,7 @@ pub fn package_game(
         dst = zip_path.display(),
     );
     check!();
+    prog!(0.90);
     let mut zip_child = match crate::ops::cmd("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .spawn()
@@ -143,13 +155,18 @@ pub fn package_game(
         }
         match zip_child.try_wait() {
             Ok(Some(s)) => break s,
-            Ok(None)    => std::thread::sleep(Duration::from_millis(200)),
-            Err(e)      => return format!("[ERROR] Waiting for zip: {}", e),
+            Ok(None)    => {
+                let cur = *progress.lock().unwrap();
+                *progress.lock().unwrap() = cur + (0.99 - cur) * 0.05;
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => return format!("[ERROR] Waiting for zip: {}", e),
         }
     };
     if !zip_exit.success() {
         return "[ERROR] Compress-Archive failed — check the log.".to_string();
     }
+    prog!(1.0);
 
     *pending_zip.lock().unwrap() = Some(zip_path.clone());
     format!(
