@@ -1,0 +1,17 @@
+﻿[package]
+name = "unreal_devtool"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.27.2" # The GUI framework
+winreg = "0.52.0" # For finding Unreal Engine
+duct = "0.13.7"   # For running commands
+rfd = "0.14"      # Native OS file/folder picker dialog
+image = { version = "0.25", features = ["gif"] }  # GIF frame decoding
+
+[profile.release]
+opt-level   = 3       # full optimisation
+lto         = true    # link-time optimisation across all crates
+codegen-units = 1     # single codegen unit, enables better LTO
+strip       = true    # strip debug symbols → smaller binary

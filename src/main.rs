@@ -1,0 +1,28 @@
+// In release builds, hide the console window so only the GUI appears.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod app;
+mod config;
+mod engine;
+mod gif;
+mod ops;
+mod theme;
+mod types;
+mod ui;
+
+use eframe::egui;
+
+fn main() -> eframe::Result<()> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([520.0, 560.0])
+            .with_title("Unreal DevTool")
+            .with_resizable(false),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "Unreal DevTool",
+        options,
+        Box::new(|cc| Box::new(app::DevToolApp::new(cc)) as Box<dyn eframe::App>),
+    )
+}

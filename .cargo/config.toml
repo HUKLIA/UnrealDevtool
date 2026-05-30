@@ -1,0 +1,6 @@
+# Statically link the Visual C++ runtime on Windows MSVC targets.
+# Without this the exe silently depends on vcruntime140.dll / msvcp140.dll
+# being installed on the target machine (via Visual C++ Redistributable).
+# With this flag the runtime is baked into the exe — no extra install needed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
