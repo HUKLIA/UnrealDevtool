@@ -1,8 +1,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use crate::config::{load_project_config, load_project_path, save_project_config, save_project_path};
+use crate::config::{
+    clear_gdrive_auth, gdrive_token_path,
+    load_gdrive_user, load_project_config, load_project_path, load_upload_config,
+    save_project_config, save_project_path, save_upload_config, UploadConfig,
+};
 use crate::engine::{build_init_status, detect_unreal_engine};
 use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, vs as ops_vs};
@@ -21,6 +26,7 @@ pub struct DevToolApp {
     pub was_working:          bool,
     pub gif_player:           Option<GifPlayer>,
     pub busy_label:           String,
+    pub cancel_flag:          Arc<AtomicBool>,
 
     // Package pre-flight
     pub show_package_config:  bool,
@@ -31,6 +37,17 @@ pub struct DevToolApp {
     // VS-rebuild pre-flight
     pub show_vs_config: bool,
     pub ide_choice:     IdeChoice,
+
+    // Post-package upload panel
+    pub pending_zip:                 Arc<Mutex<Option<PathBuf>>>,
+    pub show_upload_panel:           bool,
+    pub upload_zip_path:             PathBuf,
+    pub upload_use_local:            bool,
+    pub upload_use_gdrive:           bool,
+    pub upload_local_path:           String,
+    pub upload_gdrive_folder_id:   String,
+    pub upload_gdrive_secret_path: String,   // path to client_secret.json
+    pub upload_gdrive_user_email:  String,   // populated after first OAuth sign-in
 
     // Git state machine
     pub git_state:            GitState,
@@ -51,8 +68,8 @@ impl DevToolApp {
         let project_path_input = project_path.as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        // GIF is embedded at compile time — no file needed at runtime
-        let gif_player = GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif"));
+        let gif_player  = GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif"));
+        let upload_cfg  = load_upload_config();
         Self {
             engine_dir,
             project_path,
@@ -62,13 +79,23 @@ impl DevToolApp {
             is_working:  Arc::new(Mutex::new(false)),
             was_working: false,
             gif_player,
-            busy_label:           String::new(),
+            busy_label:  String::new(),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
             show_package_config:  false,
             pack_name_input:      String::new(),
             exe_name_input:       String::new(),
             next_version_preview: 1,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
+            pending_zip:                 Arc::new(Mutex::new(None)),
+            show_upload_panel:           false,
+            upload_zip_path:             PathBuf::new(),
+            upload_use_local:            false,
+            upload_use_gdrive:           false,
+            upload_local_path:           upload_cfg.local_path,
+            upload_gdrive_folder_id:     upload_cfg.gdrive_folder_id,
+            upload_gdrive_secret_path:   upload_cfg.gdrive_secret_path,
+            upload_gdrive_user_email:    load_gdrive_user(),
             git_state:            GitState::Idle,
             git_next_state:       GitState::Idle,
             git_result:           Arc::new(Mutex::new(None)),
@@ -140,10 +167,65 @@ impl DevToolApp {
         self.show_package_config = false;
         self.busy_label = "◈  PACKAGING IN PROGRESS  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        let status_clone = Arc::clone(&self.status_message);
+        let status_clone  = Arc::clone(&self.status_message);
+        let pending_clone = Arc::clone(&self.pending_zip);
+        let cancel        = Arc::clone(&self.cancel_flag);
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, status_clone)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, status_clone, pending_clone, cancel)
         });
+    }
+
+    pub fn start_upload(&mut self) {
+        let zip = self.upload_zip_path.clone();
+        if !zip.exists() {
+            self.set_status(format!("[ERROR] Zip not found: {}", zip.display()));
+            self.show_upload_panel = false;
+            return;
+        }
+
+        save_upload_config(&UploadConfig {
+            local_path:         self.upload_local_path.clone(),
+            gdrive_folder_id:   self.upload_gdrive_folder_id.clone(),
+            gdrive_secret_path: self.upload_gdrive_secret_path.clone(),
+        });
+
+        let use_local   = self.upload_use_local;
+        let use_gdrive  = self.upload_use_gdrive;
+        let local_path  = self.upload_local_path.clone();
+        let folder_id   = self.upload_gdrive_folder_id.clone();
+        let secret_path = std::path::PathBuf::from(&self.upload_gdrive_secret_path);
+        let token_path  = gdrive_token_path().unwrap_or_default();
+        let status      = Arc::clone(&self.status_message);
+        let cancel      = Arc::clone(&self.cancel_flag);
+
+        self.show_upload_panel = false;
+        self.busy_label = "◈  UPLOADING BUILD  ◈".into();
+        if let Some(g) = &mut self.gif_player { g.reset(); }
+
+        self.run_background_task("Starting upload…", move || {
+            let mut parts = Vec::new();
+            if use_local {
+                if cancel.load(Ordering::Relaxed) { return "[CANCELLED]".to_string(); }
+                parts.push(ops_package::copy_to_local(&zip, &local_path));
+            }
+            if use_gdrive {
+                if cancel.load(Ordering::Relaxed) { return "[CANCELLED]".to_string(); }
+                parts.push(ops_package::upload_to_gdrive_oauth(
+                    &zip, &folder_id, &secret_path, &token_path, &status,
+                ));
+            }
+            if parts.is_empty() { return "[DONE] No destination selected — nothing uploaded.".to_string(); }
+            parts.join("\n")
+        });
+    }
+
+    pub fn reload_gdrive_user(&mut self) {
+        self.upload_gdrive_user_email = load_gdrive_user();
+    }
+
+    pub fn gdrive_sign_out(&mut self) {
+        clear_gdrive_auth();
+        self.upload_gdrive_user_email.clear();
     }
 
     // ── VS-rebuild actions ────────────────────────────────────────────────────
@@ -169,8 +251,9 @@ impl DevToolApp {
         self.busy_label = "◈  GENERATING PROJECT FILES  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         let status_clone = Arc::clone(&self.status_message);
+        let cancel       = Arc::clone(&self.cancel_flag);
         self.run_background_task("Preparing to regenerate project files…", move || {
-            ops_vs::rebuild_vs_files(project_path, engine_dir, ide, status_clone)
+            ops_vs::rebuild_vs_files(project_path, engine_dir, ide, status_clone, cancel)
         });
     }
 
@@ -196,8 +279,9 @@ impl DevToolApp {
         self.git_next_state = GitState::AfterPush;
         self.busy_label     = "◈  COMMITTING & PUSHING  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
+        let cancel = Arc::clone(&self.cancel_flag);
         self.run_background_task("Staging changes…", move || {
-            ops_git::task_git_commit_push(dir, msg, branch, status, result)
+            ops_git::task_git_commit_push(dir, msg, branch, status, result, cancel)
         });
     }
 
@@ -205,11 +289,12 @@ impl DevToolApp {
         let dir    = match self.git_project_dir() { Some(d) => d, None => return };
         let status = Arc::clone(&self.status_message);
         let result = Arc::clone(&self.git_result);
+        let cancel = Arc::clone(&self.cancel_flag);
         self.git_next_state = GitState::Idle;
         self.busy_label     = "◈  SYNCING WITH MAIN  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Fetching origin/main…", move || {
-            ops_git::task_git_sync(dir, status, result)
+            ops_git::task_git_sync(dir, status, result, cancel)
         });
     }
 
@@ -218,12 +303,13 @@ impl DevToolApp {
         let from_branch = self.git_current_branch.clone();
         let status      = Arc::clone(&self.status_message);
         let result      = Arc::clone(&self.git_result);
+        let cancel      = Arc::clone(&self.cancel_flag);
         self.git_merged_from = from_branch.clone();
         self.git_next_state  = GitState::AfterMerge;
         self.busy_label      = "◈  MERGING TO MAIN  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Switching to main…", move || {
-            ops_git::task_git_merge_to_main(dir, from_branch, status, result)
+            ops_git::task_git_merge_to_main(dir, from_branch, status, result, cancel)
         });
     }
 
@@ -231,11 +317,12 @@ impl DevToolApp {
         let dir    = match self.git_project_dir() { Some(d) => d, None => return };
         let status = Arc::clone(&self.status_message);
         let result = Arc::clone(&self.git_result);
+        let cancel = Arc::clone(&self.cancel_flag);
         self.git_next_state = GitState::Idle;
         self.busy_label     = "◈  SWITCHING BRANCH  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Switching branch…", move || {
-            ops_git::task_git_checkout(dir, branch, status, result)
+            ops_git::task_git_checkout(dir, branch, status, result, cancel)
         });
     }
 
@@ -243,11 +330,12 @@ impl DevToolApp {
         let dir    = match self.git_project_dir() { Some(d) => d, None => return };
         let status = Arc::clone(&self.status_message);
         let result = Arc::clone(&self.git_result);
+        let cancel = Arc::clone(&self.cancel_flag);
         self.git_next_state = GitState::Idle;
         self.busy_label     = "◈  CREATING BRANCH  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Creating branch…", move || {
-            ops_git::task_git_create_branch(dir, name, status, result)
+            ops_git::task_git_create_branch(dir, name, status, result, cancel)
         });
     }
 
@@ -257,6 +345,7 @@ impl DevToolApp {
     where
         F: FnOnce() -> String + Send + 'static,
     {
+        self.cancel_flag.store(false, Ordering::Relaxed);
         *self.is_working.lock().unwrap()     = true;
         *self.status_message.lock().unwrap() = start_msg.to_string();
         let status  = Arc::clone(&self.status_message);

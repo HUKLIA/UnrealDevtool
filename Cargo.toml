@@ -6,9 +6,13 @@ edition = "2024"
 [dependencies]
 eframe = "0.27.2" # The GUI framework
 winreg = "0.52.0" # For finding Unreal Engine
-duct = "0.13.7"   # For running commands
 rfd = "0.14"      # Native OS file/folder picker dialog
 image = { version = "0.25", features = ["gif"] }  # GIF frame decoding
+tokio      = { version = "1",    features = ["full"]            }  # Async thread pool
+reqwest    = { version = "0.12", features = ["stream", "json"]   }  # HTTP client + streaming
+yup-oauth2 = "8"                                                     # OAuth2 / token cache
+serde_json = "1"                                                     # JSON metadata for Drive API
+tokio-util = { version = "0.7", features = ["codec"]            }  # FramedRead / BytesCodec
 
 [profile.release]
 opt-level   = 3       # full optimisation

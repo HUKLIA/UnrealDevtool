@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use crate::types::IdeChoice;
 
 pub fn rebuild_vs_files(
@@ -8,8 +10,12 @@ pub fn rebuild_vs_files(
     engine:   PathBuf,
     ide:      IdeChoice,
     status:   Arc<Mutex<String>>,
+    cancel:   Arc<AtomicBool>,
 ) -> String {
-    macro_rules! upd { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
+        return "[CANCELLED] Operation was cancelled.".to_string();
+    }}; }
 
     let project_dir = match uproject.parent() {
         Some(p) => p.to_path_buf(),
@@ -43,21 +49,15 @@ pub fn rebuild_vs_files(
     let gpf_bat   = engine.join("Engine\\Build\\BatchFiles\\GenerateProjectFiles.bat");
     let build_bat = engine.join("Engine\\Build\\BatchFiles\\Build.bat");
 
-    let gen_result = if gpf_bat.exists() {
+    check!();
+    let log_path = project_dir.join("GenerateProjectFiles.log");
+
+    let (bat_path, bat_args): (&PathBuf, &[&str]) = if gpf_bat.exists() {
         upd!("[2/3] Running GenerateProjectFiles.bat…");
-        std::process::Command::new("cmd")
-            .args(["/c", &gpf_bat.to_string_lossy()])
-            .arg(format!("-project={}", uproject.display()))
-            .args(["-game", "-rocket", "-progress"])
-            .output()
+        (&gpf_bat, &["-game", "-rocket", "-progress"])
     } else if build_bat.exists() {
         upd!("[2/3] Running Build.bat -ProjectFiles…");
-        std::process::Command::new("cmd")
-            .args(["/c", &build_bat.to_string_lossy()])
-            .arg("-ProjectFiles")
-            .arg(format!("-project={}", uproject.display()))
-            .args(["-game", "-rocket", "-progress"])
-            .output()
+        (&build_bat, &["-ProjectFiles", "-game", "-rocket", "-progress"])
     } else {
         return format!(
             "[ERROR] No generator bat found in:\n{}",
@@ -65,20 +65,43 @@ pub fn rebuild_vs_files(
         );
     };
 
-    let gen_out = match gen_result {
-        Err(e) => return format!("[ERROR] Launch failed: {}", e),
-        Ok(o)  => o,
+    let log_out = match fs::File::create(&log_path) {
+        Ok(f)  => f,
+        Err(e) => return format!("[ERROR] Create log: {}", e),
     };
-    let log_path = project_dir.join("GenerateProjectFiles.log");
-    let _ = fs::write(&log_path, format!(
-        "=== STDOUT ===\n{}\n\n=== STDERR ===\n{}",
-        String::from_utf8_lossy(&gen_out.stdout),
-        String::from_utf8_lossy(&gen_out.stderr),
-    ));
-    if !gen_out.status.success() {
+    let log_err = match log_out.try_clone() {
+        Ok(f)  => f,
+        Err(e) => return format!("[ERROR] Clone log handle: {}", e),
+    };
+
+    let mut gen_child = match crate::ops::cmd("cmd")
+        .args(["/c", &bat_path.to_string_lossy()])
+        .arg(format!("-project={}", uproject.display()))
+        .args(bat_args)
+        .stdout(log_out)
+        .stderr(log_err)
+        .spawn()
+    {
+        Ok(c)  => c,
+        Err(e) => return format!("[ERROR] Launch failed: {}", e),
+    };
+
+    let gen_exit = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = gen_child.kill();
+            let _ = gen_child.wait();
+            return "[CANCELLED] Project file generation was cancelled.".to_string();
+        }
+        match gen_child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None)    => std::thread::sleep(Duration::from_millis(300)),
+            Err(e)      => return format!("[ERROR] Waiting for generator: {}", e),
+        }
+    };
+    if !gen_exit.success() {
         return format!(
             "[ERROR] Generator failed (exit {}).\nLog → {}",
-            gen_out.status.code().unwrap_or(-1),
+            gen_exit.code().unwrap_or(-1),
             log_path.display()
         );
     }
@@ -91,7 +114,7 @@ pub fn rebuild_vs_files(
             upd!("[3/3] Opening with Rider…");
             if let Some(sln_path) = &sln {
                 match find_rider() {
-                    Some(exe) => { let _ = std::process::Command::new(&exe).arg(sln_path).spawn(); }
+                    Some(exe) => { let _ = crate::ops::cmd(&exe.to_string_lossy()).arg(sln_path).spawn(); }
                     None      => shell_open(sln_path),
                 }
             }
@@ -102,15 +125,12 @@ pub fn rebuild_vs_files(
         }
     }
 
+    // Clean up the log — it's only useful on failure, which is handled above
+    let _ = fs::remove_file(&log_path);
+
     match sln {
-        Some(p) => format!(
-            "[DONE] Project files rebuilt.\nSolution → {}\nLog → {}",
-            p.display(), log_path.display()
-        ),
-        None => format!(
-            "[DONE] Project files rebuilt (no .sln found).\nLog → {}",
-            log_path.display()
-        ),
+        Some(p) => format!("[DONE] Project files rebuilt.\nSolution → {}", p.display()),
+        None    => "[DONE] Project files rebuilt (no .sln found).".to_string(),
     }
 }
 
@@ -123,7 +143,7 @@ pub fn find_sln(dir: &Path) -> Option<PathBuf> {
 
 pub fn find_rider() -> Option<PathBuf> {
     // 1. PATH (JetBrains Toolbox adds this)
-    if let Ok(o) = std::process::Command::new("where").arg("rider64.exe").output() {
+    if let Ok(o) = crate::ops::cmd("where").arg("rider64.exe").output() {
         if o.status.success() {
             let s = String::from_utf8_lossy(&o.stdout);
             if let Some(line) = s.lines().next() {
@@ -161,7 +181,7 @@ pub fn scan_for_rider(base: &Path) -> Option<PathBuf> {
 }
 
 pub fn shell_open(path: &Path) {
-    let _ = std::process::Command::new("cmd")
+    let _ = crate::ops::cmd("cmd")
         .args(["/c", "start", "", &path.to_string_lossy()])
         .spawn();
 }

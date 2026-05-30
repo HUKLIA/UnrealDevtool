@@ -62,3 +62,76 @@ pub fn save_project_config(project_path: &Path, pack_name: &str, exe_name: &str)
         let _ = fs::write(cfg, format!("{}\n{}", pack_name, exe_name));
     }
 }
+
+// ── Upload destination config (`upload.cfg`) ─────────────────────────────────
+// Line 1: local_copy_path
+// Line 2: gdrive_folder_id
+// Line 3: gdrive_secret_path  (path to client_secret.json from Google Cloud Console)
+
+pub struct UploadConfig {
+    pub local_path:         String,
+    pub gdrive_folder_id:   String,
+    pub gdrive_secret_path: String,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            local_path:         String::new(),
+            gdrive_folder_id:   String::new(),
+            gdrive_secret_path: String::new(),
+        }
+    }
+}
+
+pub fn load_upload_config() -> UploadConfig {
+    let path = match config_dir() { Some(d) => d.join("upload.cfg"), None => return UploadConfig::default() };
+    let content = match fs::read_to_string(&path) { Ok(s) => s, Err(_) => return UploadConfig::default() };
+    let mut lines = content.lines();
+    UploadConfig {
+        local_path:         lines.next().unwrap_or("").to_string(),
+        gdrive_folder_id:   lines.next().unwrap_or("").to_string(),
+        gdrive_secret_path: lines.next().unwrap_or("").to_string(),
+    }
+}
+
+pub fn save_upload_config(cfg: &UploadConfig) {
+    if let Some(dir) = config_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(
+            dir.join("upload.cfg"),
+            format!("{}\n{}\n{}", cfg.local_path, cfg.gdrive_folder_id, cfg.gdrive_secret_path),
+        );
+    }
+}
+
+// ── Google Drive OAuth2 token cache + signed-in user ─────────────────────────
+// `gdrive_token.json`  — yup-oauth2 token cache (access + refresh tokens)
+// `gdrive_user.txt`    — email of the signed-in user (written after first auth)
+
+pub fn gdrive_token_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("tokencache.json"))
+}
+
+pub fn gdrive_user_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("gdrive_user.txt"))
+}
+
+pub fn load_gdrive_user() -> String {
+    gdrive_user_path()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+pub fn save_gdrive_user(email: &str) {
+    if let Some(p) = gdrive_user_path() {
+        if let Some(dir) = config_dir() { let _ = fs::create_dir_all(dir); }
+        let _ = fs::write(p, email.trim());
+    }
+}
+
+pub fn clear_gdrive_auth() {
+    if let Some(p) = gdrive_token_path() { let _ = fs::remove_file(p); }
+    if let Some(p) = gdrive_user_path()  { let _ = fs::remove_file(p); }
+}

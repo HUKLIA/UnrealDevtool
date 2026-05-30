@@ -28,6 +28,14 @@ pub enum GitTaskStatus {
     Error,
 }
 
+/// Returned from `show_upload_panel_ui()` to tell the caller what to do.
+pub enum UploadAction {
+    None,
+    Upload,
+    Skip,
+    SignOut,
+}
+
 /// Returned from `show_git_panel()` to tell the caller which background task to launch.
 pub enum GitAction {
     None,

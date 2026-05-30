@@ -4,9 +4,32 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      upload_target:
+        description: "Where to upload the project zip"
+        required: true
+        default: "github-release"
+        type: choice
+        options:
+          - github-release
+          - google-drive
+          - local-path
+          - all
+      local_path:
+        description: "Destination path for zip copy (used when local-path or all is selected)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
+
+env:
+  # When triggered by push, default to github-release only.
+  # When manually triggered, the user's choice overrides this.
+  UPLOAD_TARGET: ${{ github.event.inputs.upload_target || 'github-release' }}
+  LOCAL_PATH:    ${{ github.event.inputs.local_path || '' }}
 
 jobs:
   build:
@@ -34,21 +57,44 @@ jobs:
       - name: Build release
         run: cargo build --release --target x86_64-pc-windows-msvc
 
+      # ── Read version ─────────────────────────────────────────────────────────
       - name: Get version
         id: version
         run: |
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
           echo "version=$ver" >> $env:GITHUB_OUTPUT
+          echo "zip_name=unreal_devtool-v$ver.zip" >> $env:GITHUB_OUTPUT
 
+      # ── Package: copy exe into repo root, then zip everything except build dirs ─
+      - name: Package project zip
+        shell: pwsh
+        run: |
+          $exe = "target\x86_64-pc-windows-msvc\release\unreal_devtool.exe"
+          Copy-Item $exe -Destination "unreal_devtool.exe"
+
+          $zip = "${{ steps.version.outputs.zip_name }}"
+          # Collect all items except the ones we don't want in the zip
+          $exclude = @("target", ".git", ".idea", ".cargo", $zip)
+          $items = Get-ChildItem -Path . -Force |
+                   Where-Object { $exclude -notcontains $_.Name }
+
+          Compress-Archive -Path $items.FullName -DestinationPath $zip -Force
+          echo "ZIP created: $zip"
+          echo "zip_path=$zip" >> $env:GITHUB_OUTPUT
+        id: package
+
+      # ── GitHub Release ────────────────────────────────────────────────────────
       - name: Delete existing latest tag (if present)
+        if: contains(fromJson('["github-release","all"]'), env.UPLOAD_TARGET)
+        shell: pwsh
         run: |
           git tag -d latest 2>$null; exit 0
           git push origin :refs/tags/latest 2>$null; exit 0
-        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish release
+      - name: Publish GitHub release
+        if: contains(fromJson('["github-release","all"]'), env.UPLOAD_TARGET)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
@@ -56,5 +102,38 @@ jobs:
           body: |
             Automated build from commit ${{ github.sha }} on `main`.
             Built with `cargo build --release`.
-          files: target/x86_64-pc-windows-msvc/release/unreal_devtool.exe
+          files: |
+            unreal_devtool.exe
+            ${{ steps.version.outputs.zip_name }}
           make_latest: true
+
+      # ── Google Drive upload ───────────────────────────────────────────────────
+      # Requires two GitHub secrets:
+      #   GDRIVE_CREDENTIALS  – contents of a Google service-account JSON key file
+      #   GDRIVE_FOLDER_ID    – the ID from the Drive folder URL
+      #                         (https://drive.google.com/drive/folders/<ID>)
+      - name: Upload zip to Google Drive
+        if: contains(fromJson('["google-drive","all"]'), env.UPLOAD_TARGET)
+        uses: adityak74/google-drive-upload-git-action@v0.4
+        with:
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+          filename:    ${{ steps.version.outputs.zip_name }}
+          folderId:    ${{ secrets.GDRIVE_FOLDER_ID }}
+          name:        ${{ steps.version.outputs.zip_name }}
+          overwrite:   "true"
+
+      # ── Copy to local / network path ──────────────────────────────────────────
+      - name: Copy zip to local/network path
+        if: contains(fromJson('["local-path","all"]'), env.UPLOAD_TARGET) && env.LOCAL_PATH != ''
+        shell: pwsh
+        run: |
+          $dest = "$env:LOCAL_PATH"
+          if (-not (Test-Path $dest)) {
+            New-Item -ItemType Directory -Force $dest | Out-Null
+          }
+          Copy-Item "${{ steps.version.outputs.zip_name }}" -Destination $dest -Force
+          echo "Copied zip to: $dest"
+
+      - name: Warn if local-path selected but no path provided
+        if: contains(fromJson('["local-path","all"]'), env.UPLOAD_TARGET) && env.LOCAL_PATH == ''
+        run: echo "::warning::local-path was selected but no destination path was provided. Skipping copy step."

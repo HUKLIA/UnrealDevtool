@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::types::GitTaskStatus;
 
 // ── Low-level git helpers ─────────────────────────────────────────────────────
 
 pub fn run_git(dir: &Path, args: &[&str]) -> (bool, String) {
-    match std::process::Command::new("git").args(args).current_dir(dir).output() {
+    match crate::ops::cmd("git").args(args).current_dir(dir).output() {
         Err(e) => (false, format!("git not found: {}", e)),
         Ok(o)  => {
             let out = format!(
@@ -38,9 +39,15 @@ pub fn task_git_commit_push(
     branch: String,
     status: Arc<Mutex<String>>,
     result: Arc<Mutex<Option<GitTaskStatus>>>,
+    cancel: Arc<AtomicBool>,
 ) -> String {
-    macro_rules! upd { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return "[CANCELLED] Git operation was cancelled.".to_string();
+    }}; }
 
+    check!();
     upd!("[1/4] Staging all changes…");
     let (ok, out) = run_git(&dir, &["add", "."]);
     if !ok {
@@ -51,6 +58,7 @@ pub fn task_git_commit_push(
     let (_, porcelain) = run_git(&dir, &["status", "--porcelain"]);
     let has_changes = !porcelain.trim().is_empty();
 
+    check!();
     if has_changes {
         upd!(format!("[2/4] Committing: \"{}\"…", msg));
         let (ok, out) = run_git(&dir, &["commit", "-m", &msg]);
@@ -62,6 +70,7 @@ pub fn task_git_commit_push(
         upd!("[2/4] Nothing to commit — skipping commit step.");
     }
 
+    check!();
     upd!(format!("[3/4] Pushing to origin/{}…", branch));
     let (ok, out) = run_git(&dir, &["push", "-u", "origin", &branch]);
     if !ok {
@@ -84,9 +93,15 @@ pub fn task_git_sync(
     dir:    PathBuf,
     status: Arc<Mutex<String>>,
     result: Arc<Mutex<Option<GitTaskStatus>>>,
+    cancel: Arc<AtomicBool>,
 ) -> String {
-    macro_rules! upd { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return "[CANCELLED] Git operation was cancelled.".to_string();
+    }}; }
 
+    check!();
     upd!("[1/2] Fetching origin/main…");
     let (ok, out) = run_git(&dir, &["fetch", "origin", "main"]);
     if !ok {
@@ -94,6 +109,7 @@ pub fn task_git_sync(
         return format!("[ERROR] fetch: {}", out);
     }
 
+    check!();
     upd!("[2/2] Rebasing onto origin/main…");
     let (ok, out) = run_git(&dir, &["rebase", "origin/main"]);
     if !ok {
@@ -117,9 +133,15 @@ pub fn task_git_merge_to_main(
     from_branch: String,
     status:      Arc<Mutex<String>>,
     result:      Arc<Mutex<Option<GitTaskStatus>>>,
+    cancel:      Arc<AtomicBool>,
 ) -> String {
-    macro_rules! upd { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return "[CANCELLED] Git operation was cancelled.".to_string();
+    }}; }
 
+    check!();
     upd!("[1/4] Switching to main…");
     let (ok, out) = run_git(&dir, &["checkout", "main"]);
     if !ok {
@@ -127,6 +149,7 @@ pub fn task_git_merge_to_main(
         return format!("[ERROR] checkout main: {}", out);
     }
 
+    check!();
     upd!("[2/4] Pulling latest main…");
     let (ok, out) = run_git(&dir, &["pull", "origin", "main"]);
     if !ok {
@@ -138,6 +161,7 @@ pub fn task_git_merge_to_main(
         return format!("[ERROR] pull main: {}", out);
     }
 
+    check!();
     upd!(format!("[3/4] Merging {} → main…", from_branch));
     let (ok, out) = run_git(&dir, &["merge", &from_branch]);
     if !ok {
@@ -168,7 +192,12 @@ pub fn task_git_checkout(
     branch: String,
     status: Arc<Mutex<String>>,
     result: Arc<Mutex<Option<GitTaskStatus>>>,
+    cancel: Arc<AtomicBool>,
 ) -> String {
+    if cancel.load(Ordering::Relaxed) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return "[CANCELLED] Git operation was cancelled.".to_string();
+    }
     *status.lock().unwrap() = format!("Switching to {}…", branch);
     let (ok, out) = run_git(&dir, &["checkout", &branch]);
     if !ok {
@@ -184,7 +213,12 @@ pub fn task_git_create_branch(
     name:   String,
     status: Arc<Mutex<String>>,
     result: Arc<Mutex<Option<GitTaskStatus>>>,
+    cancel: Arc<AtomicBool>,
 ) -> String {
+    if cancel.load(Ordering::Relaxed) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return "[CANCELLED] Git operation was cancelled.".to_string();
+    }
     *status.lock().unwrap() = format!("Creating branch {}…", name);
     let (ok, out) = run_git(&dir, &["checkout", "-b", &name]);
     if !ok {

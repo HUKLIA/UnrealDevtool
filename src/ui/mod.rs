@@ -6,7 +6,8 @@ use eframe::egui;
 use crate::app::DevToolApp;
 use crate::config::{clear_project_path, save_project_path};
 use crate::theme::*;
-use crate::types::{GitAction, GitState, GitTaskStatus};
+use crate::types::{GitAction, GitState, GitTaskStatus, UploadAction};
+use std::sync::atomic::Ordering;
 
 // ── eframe::App — the main update loop ───────────────────────────────────────
 
@@ -31,6 +32,18 @@ impl eframe::App for DevToolApp {
                 }
                 self.git_next_state = GitState::Idle;
             }
+
+            // If packaging produced a zip, open the upload panel
+            if let Some(zip) = self.pending_zip.lock().unwrap().take() {
+                self.upload_zip_path   = zip;
+                self.upload_use_local  = false;
+                self.upload_use_gdrive = false;
+                self.show_upload_panel = true;
+            }
+
+            // Refresh the signed-in Google account display after every task
+            // (covers the case where an upload just completed and saved the email)
+            self.reload_gdrive_user();
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -91,6 +104,11 @@ impl DevToolApp {
             ui.add_space(2.0);
             ui.label(egui::RichText::new("see Status / Output below for progress")
                 .size(11.0).color(HINT_GRAY));
+            ui.add_space(8.0);
+            if ui.add_sized([110.0, 26.0], egui::Button::new("Cancel")).clicked() {
+                self.cancel_flag.store(true, Ordering::Relaxed);
+                self.set_status("[CANCELLING] Stopping — please wait…".into());
+            }
         });
         ui.add_space(8.0);
     }
@@ -101,7 +119,16 @@ impl DevToolApp {
         ui.separator();
         ui.add_space(10.0);
 
-        if self.show_package_config {
+        if self.show_upload_panel {
+            let action = self.show_upload_panel_ui(ui);
+            match action {
+                UploadAction::Upload  => self.start_upload(),
+                UploadAction::Skip    => { self.show_upload_panel = false; }
+                UploadAction::SignOut => self.gdrive_sign_out(),
+                UploadAction::None    => {}
+            }
+
+        } else if self.show_package_config {
             let go = self.show_package_config_panel(ui);
             if go { self.start_packaging(); }
 
