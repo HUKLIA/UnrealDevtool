@@ -257,6 +257,19 @@ pub fn upload_to_gdrive_oauth(
     }
 }
 
+fn extract_gdrive_folder_id(input: &str) -> String {
+    let s = input.trim();
+    // Accept a full Drive URL like https://drive.google.com/drive/folders/ID?usp=sharing
+    if let Some(pos) = s.find("/folders/") {
+        let after = &s[pos + "/folders/".len()..];
+        let end = after
+            .find(|c: char| c == '/' || c == '?' || c == '&')
+            .unwrap_or(after.len());
+        return after[..end].to_string();
+    }
+    s.to_string()
+}
+
 async fn gdrive_upload_pipeline(
     zip:         std::path::PathBuf,
     folder_id:   String,
@@ -265,6 +278,12 @@ async fn gdrive_upload_pipeline(
     status:      Arc<Mutex<String>>,
 ) -> Result<String, String> {
     use tokio_util::codec::{BytesCodec, FramedRead};
+
+    // Normalise folder_id: accept a full Drive sharing URL or a bare ID
+    let folder_id = extract_gdrive_folder_id(&folder_id);
+    if folder_id.is_empty() {
+        return Err("[ERROR] Google Drive Folder ID is required.".to_string());
+    }
 
     // ── Read client_secret.json ───────────────────────────────────────────────
     let secret = yup_oauth2::read_application_secret(&secret_path)

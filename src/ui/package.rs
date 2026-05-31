@@ -112,7 +112,7 @@ impl DevToolApp {
                     ui.label(egui::RichText::new(format!("Current: {}", folder_display)).size(10.0).color(HINT_GRAY));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.upload_gdrive_folder_id)
-                            .hint_text("Paste folder ID from Drive URL…")
+                            .hint_text("Paste folder ID or full Drive folder URL…")
                             .desired_width(f32::INFINITY),
                     );
                     ui.add_space(6.0);
