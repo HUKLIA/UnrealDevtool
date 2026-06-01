@@ -1,6 +1,6 @@
 # Unreal DevTool
 
-A Windows desktop tool for Unreal Engine 5 developers — packages builds, regenerates Visual Studio project files, and handles Git, all from one GUI.
+A Windows desktop tool for Unreal Engine 5 developers: Packages builds, regenerates Visual Studio project files, and handles Git, all from one GUI.
 
 > **Study & research project. Not for production.**
 > Feel free to use it for testing or as a reference for your own work.
