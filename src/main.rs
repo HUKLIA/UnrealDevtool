@@ -16,8 +16,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([520.0, 560.0])
-            .with_title("Unreal DevTool")
-            .with_resizable(false),
+            .with_min_inner_size([520.0, 400.0])
+            .with_title("Unreal DevTool"),
         ..Default::default()
     };
     eframe::run_native(
