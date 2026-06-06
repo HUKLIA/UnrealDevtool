@@ -63,6 +63,9 @@ pub struct DevToolApp {
     // Post-package: open folder prompt
     pub show_open_folder_panel:    bool,
     pub pending_open_folder_path:  std::path::PathBuf,
+
+    // Extras
+    pub show_dm_spencer_panel: bool,
 }
 
 impl DevToolApp {
@@ -113,6 +116,7 @@ impl DevToolApp {
             git_package_after_merge: false,
             show_open_folder_panel:    false,
             pending_open_folder_path:  std::path::PathBuf::new(),
+            show_dm_spencer_panel:     false,
         }
     }
 

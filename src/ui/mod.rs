@@ -172,6 +172,8 @@ impl DevToolApp {
                 GitAction::StartNewBranch { name }  => self.git_start_new_branch(name),
                 GitAction::None                     => {}
             }
+        } else if self.show_dm_spencer_panel {
+            self.show_dm_spencer_panel(ui);
         } else {
             self.show_action_buttons(ui);
         }
@@ -197,6 +199,63 @@ impl DevToolApp {
             ui.add_space(6.0);
             ui.colored_label(WARN_AMBER, "⚠  Set a project path above to enable these actions.");
         }
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        let w = [ui.available_width(), 40.0];
+        if ui.add_sized(w, egui::Button::new("🍪  Cookie Clicker")).clicked() {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", "https://orteil.dashnet.org/cookieclicker/"])
+                .spawn();
+        }
+        ui.add_space(8.0);
+        if ui.add_sized(w, egui::Button::new("💬  DM Spencer")).clicked() {
+            self.show_dm_spencer_panel = true;
+        }
+    }
+
+    pub fn show_dm_spencer_panel(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("How to DM Spencer on Discord")
+                .size(16.0).color(egui::Color32::WHITE).strong());
+        });
+        ui.add_space(12.0);
+
+        let steps: &[(&str, &str)] = &[
+            ("1", "Open Discord on your PC or phone."),
+            ("2", "Press  Ctrl + K  (PC) or tap the 🔍 Search icon (mobile)."),
+            ("3", "Type  gonkindroid  in the search box."),
+            ("4", "Click on  Gonk Droid  when it appears in the results."),
+            ("5", "Type your message in the chat box and press  Enter  to send."),
+        ];
+
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(30, 30, 40))
+            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                for (num, step) in steps {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(MIKU_TEAL,
+                            egui::RichText::new(format!("Step {}:", num)).strong());
+                        ui.label(egui::RichText::new(*step).color(egui::Color32::LIGHT_GRAY));
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+
+        ui.add_space(10.0);
+        ui.colored_label(egui::Color32::GRAY,
+            "Note: gonkindroid must share a server with you, or have DMs open.");
+        ui.add_space(12.0);
+        ui.vertical_centered(|ui| {
+            if ui.add_sized([100.0, 28.0], egui::Button::new("← Back")).clicked() {
+                self.show_dm_spencer_panel = false;
+            }
+        });
     }
 
     pub fn show_project_path_row(&mut self, ui: &mut egui::Ui) {
