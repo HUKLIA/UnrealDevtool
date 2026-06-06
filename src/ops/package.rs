@@ -26,7 +26,7 @@ pub fn package_game(
     };
     let build_dir   = project_dir.join("build");
     let version_num = find_next_version(&build_dir);
-    let version_str = format!("v0.0.{}", version_num);
+    let version_str = format_version(version_num);
     let version_dir = build_dir.join(&version_str);
     let log_path    = version_dir.join("BuildLog.txt");
 
@@ -37,6 +37,8 @@ pub fn package_game(
     }
     prog!(0.05);
 
+    check!();
+    close_editor_if_running(&status);
     check!();
     let runuat = engine.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
     upd!(format!("[2/5] Running UAT BuildCookRun…  (may take 30+ min)\nLog → {}", log_path.display()));
@@ -417,6 +419,52 @@ async fn gdrive_upload_pipeline(
     }
 }
 
+fn close_editor_if_running(status: &Arc<Mutex<String>>) {
+    const EDITORS: &[&str] = &["UnrealEditor.exe", "UE4Editor.exe"];
+    for editor_exe in EDITORS {
+        if !is_process_running(editor_exe) { continue; }
+
+        *status.lock().unwrap() = format!(
+            "[PRE-FLIGHT] {} is open — closing it before packaging…\n\
+             (packaging requires the editor to be closed)",
+            editor_exe
+        );
+
+        // Graceful close first (sends WM_CLOSE)
+        let _ = crate::ops::cmd("taskkill")
+            .args(["/im", editor_exe])
+            .output();
+
+        // Wait up to 30 s for graceful exit (poll every 500 ms)
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(500));
+            if !is_process_running(editor_exe) { break; }
+        }
+
+        // Force-kill if it still hasn't exited
+        if is_process_running(editor_exe) {
+            let _ = crate::ops::cmd("taskkill")
+                .args(["/f", "/im", editor_exe])
+                .output();
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+}
+
+fn is_process_running(exe_name: &str) -> bool {
+    crate::ops::cmd("tasklist")
+        .args(["/fi", &format!("imagename eq {}", exe_name), "/fo", "csv", "/nh"])
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .to_ascii_lowercase()
+                .contains(&exe_name.to_ascii_lowercase())
+        })
+        .unwrap_or(false)
+}
+
+/// Returns a flat build number (minor*100 + patch). Display with [`format_version`].
+/// Parses both old `v0.0.X` dirs and new `v0.M.P` dirs so upgrades are seamless.
 pub fn find_next_version(build_dir: &Path) -> u32 {
     if !build_dir.exists() { return 1; }
     let mut highest = 0u32;
@@ -425,14 +473,25 @@ pub fn find_next_version(build_dir: &Path) -> u32 {
             if !entry.path().is_dir() { continue; }
             let name = entry.file_name();
             let s    = name.to_string_lossy();
-            if let Some(rest) = s.strip_prefix("v0.0.") {
-                if let Ok(n) = rest.parse::<u32>() {
-                    if n > highest { highest = n; }
+            // strip "v0." then parse "minor.patch"
+            if let Some(rest) = s.strip_prefix("v0.") {
+                let mut parts = rest.splitn(2, '.');
+                if let (Some(m), Some(p)) = (parts.next(), parts.next()) {
+                    if let (Ok(minor), Ok(patch)) = (m.parse::<u32>(), p.parse::<u32>()) {
+                        let flat = minor * 100 + patch;
+                        if flat > highest { highest = flat; }
+                    }
                 }
             }
         }
     }
     highest + 1
+}
+
+/// Converts a flat build number into `v0.minor.patch` (rolls over at 100).
+/// n=1 → "v0.0.1", n=99 → "v0.0.99", n=100 → "v0.1.0", n=200 → "v0.2.0".
+pub fn format_version(n: u32) -> String {
+    format!("v0.{}.{}", n / 100, n % 100)
 }
 
 pub fn find_main_exe(dir: &Path) -> Option<PathBuf> {

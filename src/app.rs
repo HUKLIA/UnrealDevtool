@@ -51,13 +51,18 @@ pub struct DevToolApp {
     pub upload_gdrive_user_email:  String,   // populated after first OAuth sign-in
 
     // Git state machine
-    pub git_state:            GitState,
-    pub git_next_state:       GitState,
-    pub git_result:           Arc<Mutex<Option<GitTaskStatus>>>,
-    pub git_current_branch:   String,
-    pub git_merged_from:      String,
-    pub git_commit_msg:       String,
-    pub git_new_branch_name:  String,
+    pub git_state:               GitState,
+    pub git_next_state:          GitState,
+    pub git_result:              Arc<Mutex<Option<GitTaskStatus>>>,
+    pub git_current_branch:      String,
+    pub git_merged_from:         String,
+    pub git_commit_msg:          String,
+    pub git_new_branch_name:     String,
+    pub git_package_after_merge: bool,
+
+    // Post-package: open folder prompt
+    pub show_open_folder_panel:    bool,
+    pub pending_open_folder_path:  std::path::PathBuf,
 }
 
 impl DevToolApp {
@@ -98,13 +103,16 @@ impl DevToolApp {
             upload_gdrive_folder_id:     upload_cfg.gdrive_folder_id,
             upload_gdrive_secret_path:   upload_cfg.gdrive_secret_path,
             upload_gdrive_user_email:    load_gdrive_user(),
-            git_state:            GitState::Idle,
-            git_next_state:       GitState::Idle,
-            git_result:           Arc::new(Mutex::new(None)),
-            git_current_branch:   String::new(),
-            git_merged_from:      String::new(),
-            git_commit_msg:       String::new(),
-            git_new_branch_name:  String::new(),
+            git_state:               GitState::Idle,
+            git_next_state:          GitState::Idle,
+            git_result:              Arc::new(Mutex::new(None)),
+            git_current_branch:      String::new(),
+            git_merged_from:         String::new(),
+            git_commit_msg:          String::new(),
+            git_new_branch_name:     String::new(),
+            git_package_after_merge: false,
+            show_open_folder_panel:    false,
+            pending_open_folder_path:  std::path::PathBuf::new(),
         }
     }
 
@@ -307,6 +315,11 @@ impl DevToolApp {
         self.run_background_task("Fetching origin/main…", move || {
             ops_git::task_git_sync(dir, status, result, cancel, progress)
         });
+    }
+
+    pub fn start_merge_and_package(&mut self) {
+        self.git_package_after_merge = true;
+        self.git_start_merge();
     }
 
     pub fn git_start_merge(&mut self) {

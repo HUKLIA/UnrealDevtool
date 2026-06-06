@@ -142,10 +142,13 @@ impl DevToolApp {
             ).size(10.0).color(WARN_AMBER));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add_sized([190.0, 32.0], egui::Button::new("▶  Merge to Main")).clicked() {
+                if ui.add_sized([140.0, 32.0], egui::Button::new("▶  Merge only")).clicked() {
                     action = GitAction::StartMerge;
                 }
-                if ui.add_sized([90.0, 32.0], egui::Button::new("« Back")).clicked() {
+                if ui.add_sized([155.0, 32.0], egui::Button::new("📦  Merge + Package")).clicked() {
+                    action = GitAction::StartMergeAndPackage;
+                }
+                if ui.add_sized([80.0, 32.0], egui::Button::new("« Back")).clicked() {
                     self.git_state = GitState::Menu;
                 }
             });

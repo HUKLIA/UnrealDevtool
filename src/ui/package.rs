@@ -195,7 +195,7 @@ impl DevToolApp {
 
     pub fn show_package_config_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut do_start = false;
-        let version_label = format!("v0.0.{}", self.next_version_preview);
+        let version_label = crate::ops::package::format_version(self.next_version_preview);
         let pack_preview  = format!(
             "→ build/{}/{}/   and   {}_{}.zip",
             version_label,
@@ -245,5 +245,38 @@ impl DevToolApp {
                 });
             });
         do_start
+    }
+
+    pub fn show_open_folder_panel(&mut self, ui: &mut egui::Ui) {
+        let path = self.pending_open_folder_path.clone();
+        let display = path.to_string_lossy().to_string();
+
+        egui::Frame::none()
+            .fill(PANEL_DARK)
+            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("📁  Packaging complete!").size(13.0).color(MIKU_TEAL));
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!("Output: {}", display))
+                        .size(10.0).color(HINT_GRAY).monospace(),
+                );
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Open the output folder?").size(12.0).color(egui::Color32::WHITE));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add_sized([140.0, 32.0], egui::Button::new("📂  Yes, open")).clicked() {
+                        let _ = crate::ops::cmd("explorer").arg(&path).spawn();
+                        self.show_open_folder_panel = false;
+                        self.show_upload_panel      = true;
+                    }
+                    if ui.add_sized([140.0, 32.0], egui::Button::new("—  No, skip")).clicked() {
+                        self.show_open_folder_panel = false;
+                        self.show_upload_panel      = true;
+                    }
+                });
+            });
     }
 }

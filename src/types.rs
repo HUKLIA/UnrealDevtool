@@ -42,6 +42,7 @@ pub enum GitAction {
     StartCommitPush,
     StartSync,
     StartMerge,
+    StartMergeAndPackage,
     StartCheckout { branch: String },
     StartNewBranch { name: String },
 }

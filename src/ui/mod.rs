@@ -25,20 +25,32 @@ impl eframe::App for DevToolApp {
                 match gs {
                     GitTaskStatus::Ok => {
                         self.git_state = self.git_next_state.clone();
+                        // After merge: auto-open package config if requested
+                        if self.git_package_after_merge && self.git_state == GitState::AfterMerge {
+                            self.git_package_after_merge = false;
+                            self.git_state = GitState::Idle;
+                            self.open_package_config();
+                        }
                     }
                     GitTaskStatus::Conflict | GitTaskStatus::Error => {
                         self.git_state = GitState::Idle;
+                        self.git_package_after_merge = false;
                     }
                 }
                 self.git_next_state = GitState::Idle;
             }
 
-            // If packaging produced a zip, open the upload panel
+            // If packaging produced a zip, ask about the output folder first
             if let Some(zip) = self.pending_zip.lock().unwrap().take() {
-                self.upload_zip_path   = zip;
+                self.upload_zip_path   = zip.clone();
                 self.upload_use_local  = false;
                 self.upload_use_gdrive = false;
-                self.show_upload_panel = true;
+                if let Some(folder) = zip.parent() {
+                    self.pending_open_folder_path = folder.to_path_buf();
+                    self.show_open_folder_panel   = true;
+                } else {
+                    self.show_upload_panel = true;
+                }
             }
 
             // Refresh the signed-in Google account display after every task
@@ -129,7 +141,10 @@ impl DevToolApp {
         ui.separator();
         ui.add_space(10.0);
 
-        if self.show_upload_panel {
+        if self.show_open_folder_panel {
+            self.show_open_folder_panel(ui);
+
+        } else if self.show_upload_panel {
             let action = self.show_upload_panel_ui(ui);
             match action {
                 UploadAction::Upload  => self.start_upload(),
@@ -152,6 +167,7 @@ impl DevToolApp {
                 GitAction::StartCommitPush          => self.git_start_commit_push(),
                 GitAction::StartSync                => self.git_start_sync(),
                 GitAction::StartMerge               => self.git_start_merge(),
+                GitAction::StartMergeAndPackage     => self.start_merge_and_package(),
                 GitAction::StartCheckout { branch } => self.git_start_checkout(branch),
                 GitAction::StartNewBranch { name }  => self.git_start_new_branch(name),
                 GitAction::None                     => {}
