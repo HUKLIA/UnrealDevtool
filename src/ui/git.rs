@@ -38,7 +38,7 @@ impl DevToolApp {
             }
             ui.add_space(5.0);
             ui.add_enabled_ui(!on_main, |ui| {
-                if ui.add_sized(w, egui::Button::new("🔀  Merge current branch  ▶  main")).clicked() {
+                if ui.add_sized(w, egui::Button::new("🔀  Merge current branch  >>  main")).clicked() {
                     self.git_state = GitState::MergeConfirm;
                 }
             });
@@ -61,7 +61,7 @@ impl DevToolApp {
 
         Self::git_frame().show(ui, |ui| {
             ui.label(egui::RichText::new("📤  Commit & Push").size(13.0).color(MIKU_TEAL));
-            ui.label(egui::RichText::new(format!("▶  {}", branch)).size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new(format!(">>  {}", branch)).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Commit message:").size(11.0).color(egui::Color32::GRAY));
             let resp = ui.add(
@@ -81,7 +81,7 @@ impl DevToolApp {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(can_commit, |ui| {
-                    if ui.add_sized([190.0, 32.0], egui::Button::new("▶  Commit & Push")).clicked() {
+                    if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Commit & Push")).clicked() {
                         action = GitAction::StartCommitPush;
                     }
                 });
@@ -111,7 +111,7 @@ impl DevToolApp {
             ).size(10.0).color(WARN_AMBER));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add_sized([190.0, 32.0], egui::Button::new("▶  Fetch & Rebase")).clicked() {
+                if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Fetch & Rebase")).clicked() {
                     action = GitAction::StartSync;
                 }
                 if ui.add_sized([90.0, 32.0], egui::Button::new("« Back")).clicked() {
@@ -128,7 +128,7 @@ impl DevToolApp {
 
         Self::git_frame().show(ui, |ui| {
             ui.label(egui::RichText::new("🔀  Merge to Main").size(13.0).color(MIKU_TEAL));
-            ui.label(egui::RichText::new(format!("{}  ▶  main", from_branch)).size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new(format!("{}  >>  main", from_branch)).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(8.0);
             Self::code_block().show(ui, |ui| {
                 ui.label(egui::RichText::new("  1.  git checkout main").size(11.0).color(egui::Color32::LIGHT_GRAY));
@@ -142,7 +142,7 @@ impl DevToolApp {
             ).size(10.0).color(WARN_AMBER));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add_sized([140.0, 32.0], egui::Button::new("▶  Merge only")).clicked() {
+                if ui.add_sized([140.0, 32.0], egui::Button::new(">>  Merge only")).clicked() {
                     action = GitAction::StartMerge;
                 }
                 if ui.add_sized([155.0, 32.0], egui::Button::new("📦  Merge + Package")).clicked() {
@@ -160,7 +160,7 @@ impl DevToolApp {
         let branch = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.colored_label(MIKU_TEAL, format!("✓  Pushed to  {}", branch));
+            ui.colored_label(MIKU_TEAL, format!("[OK]  Pushed to  {}", branch));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("What next?").size(11.0).color(egui::Color32::GRAY));
             ui.add_space(6.0);
@@ -186,7 +186,7 @@ impl DevToolApp {
         let merged_from = self.git_merged_from.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.colored_label(MIKU_TEAL, format!("✓  Merged {}  ▶  main", merged_from));
+            ui.colored_label(MIKU_TEAL, format!("[OK]  Merged {}  >>  main", merged_from));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("What next?").size(11.0).color(egui::Color32::GRAY));
             ui.add_space(6.0);
@@ -235,7 +235,7 @@ impl DevToolApp {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(can_create, |ui| {
-                    if ui.add_sized([190.0, 32.0], egui::Button::new("▶  Create Branch")).clicked() {
+                    if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Create Branch")).clicked() {
                         action = GitAction::StartNewBranch { name: self.git_new_branch_name.trim().to_string() };
                     }
                 });

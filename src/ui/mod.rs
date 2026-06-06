@@ -8,6 +8,8 @@ use crate::config::{clear_project_path, save_project_path};
 use crate::theme::*;
 use crate::types::{GitAction, GitState, GitTaskStatus, UploadAction};
 use std::sync::atomic::Ordering;
+use std::os::windows::process::CommandExt;
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 // ── eframe::App — the main update loop ───────────────────────────────────────
 
@@ -85,7 +87,7 @@ impl DevToolApp {
         if let Some(p) = &self.project_path {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             ui.horizontal(|ui| {
-                ui.colored_label(MIKU_TEAL, "●");
+                ui.colored_label(MIKU_TEAL, "*");
                 ui.label(egui::RichText::new(name.as_ref()).color(egui::Color32::LIGHT_GRAY));
             });
             ui.add_space(6.0);
@@ -197,7 +199,7 @@ impl DevToolApp {
         });
         if !have_project {
             ui.add_space(6.0);
-            ui.colored_label(WARN_AMBER, "⚠  Set a project path above to enable these actions.");
+            ui.colored_label(WARN_AMBER, "(!)  Set a project path above to enable these actions.");
         }
 
         ui.add_space(12.0);
@@ -208,6 +210,7 @@ impl DevToolApp {
         if ui.add_sized(w, egui::Button::new("🍪  Cookie Clicker")).clicked() {
             let _ = std::process::Command::new("cmd")
                 .args(["/C", "start", "", "https://orteil.dashnet.org/cookieclicker/"])
+                .creation_flags(CREATE_NO_WINDOW)
                 .spawn();
         }
         ui.add_space(8.0);
@@ -252,9 +255,18 @@ impl DevToolApp {
             "Note: gonkindroid must share a server with you, or have DMs open.");
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {
-            if ui.add_sized([100.0, 28.0], egui::Button::new("← Back")).clicked() {
-                self.show_dm_spencer_panel = false;
-            }
+            ui.horizontal(|ui| {
+                if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
+                    self.show_dm_spencer_panel = false;
+                }
+                ui.add_space(8.0);
+                if ui.add_sized([160.0, 28.0], egui::Button::new("🐦  Play Sponder Bird")).clicked() {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", "https://nicktam1.github.io/SponderBirdNew/"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .spawn();
+                }
+            });
         });
     }
 
@@ -291,7 +303,7 @@ impl DevToolApp {
             }
 
             if has_path {
-                if ui.add_sized([extra_btn - gap, 22.0], egui::Button::new("✕ Clear")).clicked() {
+                if ui.add_sized([extra_btn - gap, 22.0], egui::Button::new("x  Clear")).clicked() {
                     clear_project_path();
                     self.project_path = None;
                     self.project_path_input.clear();
@@ -304,10 +316,10 @@ impl DevToolApp {
         match &self.project_path {
             Some(p) => {
                 let name = p.file_name().unwrap_or_default().to_string_lossy();
-                ui.colored_label(MIKU_TEAL, format!("✓  {}", name));
+                ui.colored_label(MIKU_TEAL, format!("[OK]  {}", name));
             }
             None if !self.project_path_input.trim().is_empty() => {
-                ui.colored_label(ERR_RED, "✗  File not found or not a .uproject");
+                ui.colored_label(ERR_RED, "[!]  File not found or not a .uproject");
             }
             _ => {}
         }

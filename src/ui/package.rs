@@ -82,7 +82,7 @@ impl DevToolApp {
                     // ── Connected account ─────────────────────────────────────
                     if self.upload_gdrive_user_email.is_empty() {
                         ui.horizontal(|ui| {
-                            ui.colored_label(HINT_GRAY, "●");
+                            ui.colored_label(HINT_GRAY, "*");
                             ui.label(
                                 egui::RichText::new("Not signed in — browser will open when you upload.")
                                     .size(11.0).color(HINT_GRAY),
@@ -90,7 +90,7 @@ impl DevToolApp {
                         });
                     } else {
                         ui.horizontal(|ui| {
-                            ui.colored_label(MIKU_TEAL, "●");
+                            ui.colored_label(MIKU_TEAL, "*");
                             ui.label(
                                 egui::RichText::new(format!("Signed in as: {}", self.upload_gdrive_user_email))
                                     .size(11.0).color(egui::Color32::WHITE),
@@ -119,16 +119,16 @@ impl DevToolApp {
 
                     // ── client_secret.json (collapsible) ─────────────────────
                     egui::CollapsingHeader::new(
-                        egui::RichText::new("▸ client_secret.json  (one-time setup)").size(11.0).color(MIKU_TEAL)
+                        egui::RichText::new("> client_secret.json  (one-time setup)").size(11.0).color(MIKU_TEAL)
                     )
                     .id_source("gdrive_creds")
                     .show(ui, |ui| {
                         ui.add_space(4.0);
                         ui.label(
                             egui::RichText::new(
-                                "1. console.cloud.google.com → APIs & Services → Credentials\n\
-                                 2. Create OAuth 2.0 Client ID  →  Application type: Desktop app\n\
-                                 3. Download JSON → rename to client_secret.json\n\
+                                "1. console.cloud.google.com -> APIs & Services -> Credentials\n\
+                                 2. Create OAuth 2.0 Client ID  ->  Application type: Desktop app\n\
+                                 3. Download JSON -> rename to client_secret.json\n\
                                  4. Browse to it below.\n\
                                  On first upload the browser opens for Google sign-in.\n\
                                  Your session is saved in tokencache.json — no browser next time."
@@ -139,9 +139,9 @@ impl DevToolApp {
                         let path_set  = !self.upload_gdrive_secret_path.is_empty();
                         let path_exists = path_set && std::path::Path::new(&self.upload_gdrive_secret_path).exists();
                         let status_text = if path_exists {
-                            "✓ found"
+                            "[OK] found"
                         } else if path_set {
-                            "✗ file not found"
+                            "[!] file not found"
                         } else {
                             "not set"
                         };
@@ -175,11 +175,11 @@ impl DevToolApp {
                 // ── Action buttons ────────────────────────────────────────────
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(can_go, |ui| {
-                        if ui.add_sized([180.0, 32.0], egui::Button::new("▶  Upload / Copy")).clicked() {
+                        if ui.add_sized([180.0, 32.0], egui::Button::new(">>  Upload / Copy")).clicked() {
                             action = UploadAction::Upload;
                         }
                     });
-                    if ui.add_sized([80.0, 32.0], egui::Button::new("✕  Skip")).clicked() {
+                    if ui.add_sized([80.0, 32.0], egui::Button::new("x  Skip")).clicked() {
                         action = UploadAction::Skip;
                     }
                 });
@@ -197,13 +197,13 @@ impl DevToolApp {
         let mut do_start = false;
         let version_label = crate::ops::package::format_version(self.next_version_preview);
         let pack_preview  = format!(
-            "→ build/{}/{}/   and   {}_{}.zip",
+            "-> build/{}/{}/   and   {}_{}.zip",
             version_label,
             self.pack_name_input.trim(),
             self.pack_name_input.trim(),
             version_label,
         );
-        let exe_preview = format!("→ {}.exe", self.exe_name_input.trim());
+        let exe_preview = format!("-> {}.exe", self.exe_name_input.trim());
         let can_start   = !self.pack_name_input.trim().is_empty()
                        && !self.exe_name_input.trim().is_empty();
 
@@ -235,11 +235,11 @@ impl DevToolApp {
 
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(can_start, |ui| {
-                        if ui.add_sized([190.0, 32.0], egui::Button::new("▶  Start Packaging")).clicked() {
+                        if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Start Packaging")).clicked() {
                             do_start = true;
                         }
                     });
-                    if ui.add_sized([90.0, 32.0], egui::Button::new("✕  Cancel")).clicked() {
+                    if ui.add_sized([90.0, 32.0], egui::Button::new("x  Cancel")).clicked() {
                         self.show_package_config = false;
                     }
                 });

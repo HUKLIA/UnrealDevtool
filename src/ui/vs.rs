@@ -24,7 +24,7 @@ impl DevToolApp {
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
                             for item in &["Binaries/","Intermediate/","Saved/",".idea/",".vs/","DerivedDataCache/","*.sln"] {
-                                ui.label(egui::RichText::new(format!("✂ {}", item))
+                                ui.label(egui::RichText::new(format!("- {}", item))
                                     .size(11.0).color(egui::Color32::from_rgb(200, 100, 80)));
                             }
                         });
@@ -37,7 +37,7 @@ impl DevToolApp {
                     for (choice, label) in [
                         (IdeChoice::Rider,        "🚀  Rider"),
                         (IdeChoice::VisualStudio, "🖥  Visual Studio"),
-                        (IdeChoice::SkipOpen,     "⊘  Don't open"),
+                        (IdeChoice::SkipOpen,     "x  Don't open"),
                     ] {
                         let selected = self.ide_choice == choice;
                         let btn = egui::Button::new(
@@ -54,10 +54,10 @@ impl DevToolApp {
                 ui.add_space(12.0);
 
                 ui.horizontal(|ui| {
-                    if ui.add_sized([190.0, 32.0], egui::Button::new("▶  Confirm & Rebuild")).clicked() {
+                    if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Confirm & Rebuild")).clicked() {
                         do_start = true;
                     }
-                    if ui.add_sized([90.0, 32.0], egui::Button::new("✕  Cancel")).clicked() {
+                    if ui.add_sized([90.0, 32.0], egui::Button::new("x  Cancel")).clicked() {
                         self.show_vs_config = false;
                     }
                 });
