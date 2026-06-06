@@ -33,7 +33,6 @@ pub enum UploadAction {
     None,
     Upload,
     Skip,
-    SignOut,
 }
 
 /// Returned from `show_git_panel()` to tell the caller which background task to launch.

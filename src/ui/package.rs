@@ -70,104 +70,28 @@ impl DevToolApp {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // ── Google Drive ──────────────────────────────────────────────
+                // ── Google Drive via rclone ───────────────────────────────────
                 ui.checkbox(
                     &mut self.upload_use_gdrive,
-                    egui::RichText::new("Upload to Google Drive").size(12.0).color(egui::Color32::WHITE),
+                    egui::RichText::new("Upload to Google Drive  (via rclone)").size(12.0).color(egui::Color32::WHITE),
                 );
 
                 if self.upload_use_gdrive {
                     ui.add_space(4.0);
-
-                    // ── Connected account ─────────────────────────────────────
-                    if self.upload_gdrive_user_email.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(HINT_GRAY, "*");
-                            ui.label(
-                                egui::RichText::new("Not signed in — browser will open when you upload.")
-                                    .size(11.0).color(HINT_GRAY),
-                            );
-                        });
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(MIKU_TEAL, "*");
-                            ui.label(
-                                egui::RichText::new(format!("Signed in as: {}", self.upload_gdrive_user_email))
-                                    .size(11.0).color(egui::Color32::WHITE),
-                            );
-                            if ui.add_sized([70.0, 20.0], egui::Button::new("Sign Out")).clicked() {
-                                action = UploadAction::SignOut;
-                            }
-                        });
-                    }
-                    ui.add_space(6.0);
-
-                    // ── Folder ID ─────────────────────────────────────────────
-                    ui.label(egui::RichText::new("Drive Folder ID:").size(11.0).color(egui::Color32::GRAY));
-                    let folder_display = if self.upload_gdrive_folder_id.is_empty() {
-                        "not set".to_string()
-                    } else {
-                        self.upload_gdrive_folder_id.clone()
-                    };
-                    ui.label(egui::RichText::new(format!("Current: {}", folder_display)).size(10.0).color(HINT_GRAY));
+                    ui.label(egui::RichText::new("rclone destination:").size(11.0).color(egui::Color32::GRAY));
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.upload_gdrive_folder_id)
-                            .hint_text("Paste folder ID or full Drive folder URL…")
+                        egui::TextEdit::singleline(&mut self.upload_rclone_dest)
+                            .hint_text("gdrive:/Builds/MyGame")
                             .desired_width(f32::INFINITY),
                     );
-                    ui.add_space(6.0);
-
-                    // ── client_secret.json (collapsible) ─────────────────────
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new("> client_secret.json  (one-time setup)").size(11.0).color(MIKU_TEAL)
-                    )
-                    .id_source("gdrive_creds")
-                    .show(ui, |ui| {
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "1. console.cloud.google.com -> APIs & Services -> Credentials\n\
-                                 2. Create OAuth 2.0 Client ID  ->  Application type: Desktop app\n\
-                                 3. Download JSON -> rename to client_secret.json\n\
-                                 4. Browse to it below.\n\
-                                 On first upload the browser opens for Google sign-in.\n\
-                                 Your session is saved in tokencache.json — no browser next time."
-                            ).size(10.0).color(HINT_GRAY),
-                        );
-                        ui.add_space(6.0);
-
-                        let path_set  = !self.upload_gdrive_secret_path.is_empty();
-                        let path_exists = path_set && std::path::Path::new(&self.upload_gdrive_secret_path).exists();
-                        let status_text = if path_exists {
-                            "[OK] found"
-                        } else if path_set {
-                            "[!] file not found"
-                        } else {
-                            "not set"
-                        };
-                        let status_color = if path_exists { MIKU_TEAL } else { crate::theme::WARN_AMBER };
-
-                        ui.label(egui::RichText::new("client_secret.json:").size(11.0).color(egui::Color32::GRAY));
-                        ui.horizontal(|ui| {
-                            ui.colored_label(status_color, format!("Current: {}", status_text));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.upload_gdrive_secret_path)
-                                    .hint_text("Paste path or Browse…")
-                                    .desired_width(ui.available_width() - 86.0),
-                            );
-                            if ui.add_sized([80.0, 22.0], egui::Button::new("Browse…")).clicked() {
-                                if let Some(p) = rfd::FileDialog::new()
-                                    .add_filter("JSON credentials", &["json"])
-                                    .set_title("Select client_secret.json")
-                                    .pick_file()
-                                {
-                                    self.upload_gdrive_secret_path = p.to_string_lossy().to_string();
-                                }
-                            }
-                        });
-                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Requires rclone in PATH with a configured remote.\n\
+                             Run  rclone config  in PowerShell to set one up.\n\
+                             Example:  gdrive:/Builds/MobiusFish"
+                        ).size(10.0).color(HINT_GRAY),
+                    );
                 }
 
                 ui.add_space(14.0);

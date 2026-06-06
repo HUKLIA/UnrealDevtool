@@ -198,224 +198,73 @@ pub fn copy_to_local(zip: &Path, dest: &str) -> String {
     }
 }
 
-// ── Post-package: upload to Google Drive ─────────────────────────────────────
+// ── Post-package: upload to Google Drive via rclone ──────────────────────────
 //
-// Architecture: reqwest (streaming) + yup-oauth2 (OAuth2 / tokencache.json)
+// Requires rclone (https://rclone.org) installed and in PATH with a remote
+// configured. Set the remote up once with `rclone config` in PowerShell —
+// name it "gdrive" (or whatever prefix you use in the destination field).
 //
-// Phase 1 – Handshake
-//   POST file metadata to …?uploadType=resumable
-//   Extract the dedicated upload channel URI from the Location response header.
-//
-// Phase 2 – Chunked Streaming  (O(1) memory)
-//   tokio::fs::File  →  FramedRead<_, BytesCodec>  →  reqwest::Body::wrap_stream
-//   The runtime reads only one 8 KB chunk at a time; RAM stays constant
-//   regardless of file size — safe for multi-GB Unreal packages.
-//
-// First run  : yup-oauth2 starts a local HTTP server, opens the system browser
-//              for Google consent, waits for the 127.0.0.1 redirect with the
-//              auth code, exchanges it for tokens, writes tokencache.json.
-// Later runs : tokencache.json is read; access token is silently refreshed;
-//              the browser is never opened again unless the user signs out.
+// Example destination:  gdrive:/Builds/MobiusFish
+// Command run:          rclone copy <zip> <rclone_dest>
 
-pub fn upload_to_gdrive_oauth(
+pub fn upload_via_rclone(
     zip:         &Path,
-    folder_id:   &str,
-    secret_path: &Path,   // path to client_secret.json from Google Cloud Console
-    token_path:  &Path,   // path to tokencache.json
+    rclone_dest: &str,
     status:      &Arc<Mutex<String>>,
+    cancel:      &Arc<AtomicBool>,
 ) -> String {
-    // ── Guard clauses — fail fast, no runtime needed ──────────────────────────
-    if folder_id.trim().is_empty() {
-        return "[ERROR] Google Drive Folder ID is required.".to_string();
-    }
-    if !secret_path.exists() {
-        return format!(
-            "[ERROR] client_secret.json not found: {}\n\
-             Download it from console.cloud.google.com → APIs & Services → Credentials.",
-            secret_path.display()
-        );
+    let dest = rclone_dest.trim();
+    if dest.is_empty() {
+        return "[ERROR] rclone destination is empty.\n\
+                Enter a path like:  gdrive:/Builds/MyGame".to_string();
     }
     if !zip.exists() {
         return format!("[ERROR] Zip file not found: {}", zip.display());
     }
 
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => return format!("[ERROR] Could not start async runtime: {}", e),
-    };
-
-    let zip         = zip.to_path_buf();
-    let folder_id   = folder_id.trim().to_string();
-    let secret_path = secret_path.to_path_buf();
-    let token_path  = token_path.to_path_buf();
-    let status_arc  = Arc::clone(status);
-
-    match rt.block_on(gdrive_upload_pipeline(zip, folder_id, secret_path, token_path, status_arc)) {
-        Ok(msg)  => msg,
-        Err(msg) => msg,
-    }
-}
-
-fn extract_gdrive_folder_id(input: &str) -> String {
-    let s = input.trim();
-    // Accept a full Drive URL like https://drive.google.com/drive/folders/ID?usp=sharing
-    if let Some(pos) = s.find("/folders/") {
-        let after = &s[pos + "/folders/".len()..];
-        let end = after
-            .find(|c: char| c == '/' || c == '?' || c == '&')
-            .unwrap_or(after.len());
-        return after[..end].to_string();
-    }
-    s.to_string()
-}
-
-async fn gdrive_upload_pipeline(
-    zip:         std::path::PathBuf,
-    folder_id:   String,
-    secret_path: std::path::PathBuf,
-    token_path:  std::path::PathBuf,
-    status:      Arc<Mutex<String>>,
-) -> Result<String, String> {
-    use tokio_util::codec::{BytesCodec, FramedRead};
-
-    // Normalise folder_id: accept a full Drive sharing URL or a bare ID
-    let folder_id = extract_gdrive_folder_id(&folder_id);
-    if folder_id.is_empty() {
-        return Err("[ERROR] Google Drive Folder ID is required.".to_string());
-    }
-
-    // ── Read client_secret.json ───────────────────────────────────────────────
-    let secret = yup_oauth2::read_application_secret(&secret_path)
-        .await
-        .map_err(|e| format!("[ERROR] Read client_secret.json: {}", e))?;
-
-    // Ensure AppData dir exists before yup-oauth2 writes tokencache.json
-    if let Some(parent) = token_path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    // Show different status depending on whether this is a first-time auth
-    // or a cached token refresh — .build().await blocks until the browser
-    // flow completes, so the message must be set BEFORE calling it.
-    if token_path.exists() {
-        *status.lock().unwrap() =
-            "[AUTH] Loading saved Google session…".to_string();
-    } else {
-        *status.lock().unwrap() =
-            "[AUTH] Your browser should open for Google sign-in.\n\
-             Please sign in and click Allow to continue.\n\
-             (This only happens once — session will be saved after.)".to_string();
-    }
-
-    let auth = yup_oauth2::InstalledFlowAuthenticator::builder(
-            secret,
-            yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
-        )
-        .persist_tokens_to_disk(&token_path)
-        .build()
-        .await
-        .map_err(|e| format!("[ERROR] OAuth2 setup: {}", e))?;
-
-    // Acquire access token (silently refreshed when tokencache.json is valid)
-    let scopes = &["https://www.googleapis.com/auth/drive.file"];
-    let token  = auth.token(scopes)
-        .await
-        .map_err(|e| format!("[ERROR] Acquire token: {}", e))?;
-    let access_token = token.token()
-        .ok_or_else(|| "[ERROR] Google returned an empty access token.".to_string())?
-        .to_string();
-
-    // ── Fetch and cache the signed-in user's email ────────────────────────────
-    let http = reqwest::Client::new();
-    if let Ok(resp) = http
-        .get("https://www.googleapis.com/drive/v3/about?fields=user")
-        .bearer_auth(&access_token)
-        .send()
-        .await
-    {
-        if let Ok(json) = resp.json::<serde_json::Value>().await {
-            if let Some(email) = json["user"]["emailAddress"].as_str() {
-                crate::config::save_gdrive_user(email);
-            }
-        }
-    }
-
-    // ── File metadata ─────────────────────────────────────────────────────────
     let file_name = zip.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "build.zip".to_string());
-    let file_size = tokio::fs::metadata(&zip)
-        .await
-        .map_err(|e| format!("[ERROR] Stat zip: {}", e))?
-        .len();
 
-    // ── Phase 1: POST metadata → receive resumable upload channel URI ─────────
-    *status.lock().unwrap() =
-        "[UPLOADING] Initialising Google Drive resumable upload session…".to_string();
-
-    let metadata = serde_json::json!({ "name": file_name, "parents": [folder_id] });
-
-    let init = http
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable")
-        .bearer_auth(&access_token)
-        .header("Content-Type",            "application/json; charset=UTF-8")
-        .header("X-Upload-Content-Type",   "application/zip")
-        .header("X-Upload-Content-Length", file_size)
-        .json(&metadata)
-        .send()
-        .await
-        .map_err(|e| format!("[ERROR] Init upload session: {}", e))?;
-
-    if !init.status().is_success() {
-        let code = init.status();
-        let body = init.text().await.unwrap_or_default();
-        return Err(format!("[ERROR] Init upload HTTP {}: {}", code, &body[..body.len().min(400)]));
-    }
-
-    let upload_uri = init
-        .headers()
-        .get(reqwest::header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| "[ERROR] No Location header in upload init response.".to_string())?
-        .to_string();
-
-    // ── Phase 2: stream the zip into the upload channel (O(1) memory) ─────────
     *status.lock().unwrap() = format!(
-        "[UPLOADING] Streaming {} ({:.1} MB) to Google Drive…",
-        file_name, file_size as f64 / 1_048_576.0,
+        "[UPLOADING] Sending {}  ->  {}\n(via rclone — this may take a while for large builds)",
+        file_name, dest,
     );
 
-    // tokio::fs::File::open  — never loads the file into memory
-    let file   = tokio::fs::File::open(&zip)
-        .await
-        .map_err(|e| format!("[ERROR] Open zip: {}", e))?;
+    let mut child = match crate::ops::cmd("rclone")
+        .args(["copy", &zip.to_string_lossy(), dest])
+        .spawn()
+    {
+        Ok(c)  => c,
+        Err(e) => return format!(
+            "[ERROR] Could not launch rclone: {}\n\
+             Make sure rclone is installed and available in your PATH.\n\
+             Download: https://rclone.org/",
+            e
+        ),
+    };
 
-    // FramedRead reads 8 KB chunks; BytesCodec yields Bytes per chunk.
-    // wrap_stream pipes the async stream directly into the PUT request body.
-    let stream = FramedRead::new(file, BytesCodec::new());
-    let body   = reqwest::Body::wrap_stream(stream);
-
-    let upload = http
-        .put(&upload_uri)
-        .header("Content-Type",   "application/zip")
-        .header("Content-Length", file_size)
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| format!("[ERROR] Upload: {}", e))?;
-
-    if upload.status().is_success() {
-        Ok(format!(
-            "[DONE] Uploaded {} ({:.1} MB) to Google Drive.",
-            file_name, file_size as f64 / 1_048_576.0,
-        ))
-    } else {
-        let code = upload.status();
-        let body = upload.text().await.unwrap_or_default();
-        Err(format!("[ERROR] Upload HTTP {}: {}", code, &body[..body.len().min(400)]))
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return "[CANCELLED] rclone upload cancelled.".to_string();
+        }
+        match child.try_wait() {
+            Ok(Some(code)) => {
+                return if code.success() {
+                    format!("[DONE] Uploaded {} to {}", file_name, dest)
+                } else {
+                    format!(
+                        "[ERROR] rclone exited with code {}.\n\
+                         Check that your remote name and destination path are correct.",
+                        code.code().unwrap_or(-1)
+                    )
+                };
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(500)),
+            Err(e)   => return format!("[ERROR] Waiting for rclone: {}", e),
+        }
     }
 }
 

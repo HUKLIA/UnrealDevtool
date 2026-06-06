@@ -4,8 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use crate::config::{
-    clear_gdrive_auth, gdrive_token_path,
-    load_gdrive_user, load_project_config, load_project_path, load_upload_config,
+    load_project_config, load_project_path, load_upload_config,
     save_project_config, save_project_path, save_upload_config, UploadConfig,
 };
 use crate::engine::{build_init_status, detect_unreal_engine};
@@ -40,15 +39,13 @@ pub struct DevToolApp {
     pub ide_choice:     IdeChoice,
 
     // Post-package upload panel
-    pub pending_zip:                 Arc<Mutex<Option<PathBuf>>>,
-    pub show_upload_panel:           bool,
-    pub upload_zip_path:             PathBuf,
-    pub upload_use_local:            bool,
-    pub upload_use_gdrive:           bool,
-    pub upload_local_path:           String,
-    pub upload_gdrive_folder_id:   String,
-    pub upload_gdrive_secret_path: String,   // path to client_secret.json
-    pub upload_gdrive_user_email:  String,   // populated after first OAuth sign-in
+    pub pending_zip:        Arc<Mutex<Option<PathBuf>>>,
+    pub show_upload_panel:  bool,
+    pub upload_zip_path:    PathBuf,
+    pub upload_use_local:   bool,
+    pub upload_use_gdrive:  bool,
+    pub upload_local_path:  String,
+    pub upload_rclone_dest: String,   // e.g. "gdrive:/Builds/MyGame"
 
     // Git state machine
     pub git_state:               GitState,
@@ -97,15 +94,13 @@ impl DevToolApp {
             next_version_preview: 1,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
-            pending_zip:                 Arc::new(Mutex::new(None)),
-            show_upload_panel:           false,
-            upload_zip_path:             PathBuf::new(),
-            upload_use_local:            false,
-            upload_use_gdrive:           false,
-            upload_local_path:           upload_cfg.local_path,
-            upload_gdrive_folder_id:     upload_cfg.gdrive_folder_id,
-            upload_gdrive_secret_path:   upload_cfg.gdrive_secret_path,
-            upload_gdrive_user_email:    load_gdrive_user(),
+            pending_zip:        Arc::new(Mutex::new(None)),
+            show_upload_panel:  false,
+            upload_zip_path:    PathBuf::new(),
+            upload_use_local:   false,
+            upload_use_gdrive:  false,
+            upload_local_path:  upload_cfg.local_path,
+            upload_rclone_dest: upload_cfg.rclone_dest,
             git_state:               GitState::Idle,
             git_next_state:          GitState::Idle,
             git_result:              Arc::new(Mutex::new(None)),
@@ -199,17 +194,14 @@ impl DevToolApp {
         }
 
         save_upload_config(&UploadConfig {
-            local_path:         self.upload_local_path.clone(),
-            gdrive_folder_id:   self.upload_gdrive_folder_id.clone(),
-            gdrive_secret_path: self.upload_gdrive_secret_path.clone(),
+            local_path:  self.upload_local_path.clone(),
+            rclone_dest: self.upload_rclone_dest.clone(),
         });
 
         let use_local   = self.upload_use_local;
         let use_gdrive  = self.upload_use_gdrive;
         let local_path  = self.upload_local_path.clone();
-        let folder_id   = self.upload_gdrive_folder_id.clone();
-        let secret_path = std::path::PathBuf::from(&self.upload_gdrive_secret_path);
-        let token_path  = gdrive_token_path().unwrap_or_default();
+        let rclone_dest = self.upload_rclone_dest.clone();
         let status      = Arc::clone(&self.status_message);
         let cancel      = Arc::clone(&self.cancel_flag);
         let progress    = Arc::clone(&self.progress);
@@ -229,23 +221,12 @@ impl DevToolApp {
             if use_gdrive {
                 if cancel.load(Ordering::Relaxed) { return "[CANCELLED]".to_string(); }
                 *progress.lock().unwrap() = if use_local { 0.5 } else { 0.1 };
-                parts.push(ops_package::upload_to_gdrive_oauth(
-                    &zip, &folder_id, &secret_path, &token_path, &status,
-                ));
+                parts.push(ops_package::upload_via_rclone(&zip, &rclone_dest, &status, &cancel));
                 *progress.lock().unwrap() = 1.0;
             }
             if parts.is_empty() { return "[DONE] No destination selected — nothing uploaded.".to_string(); }
             parts.join("\n")
         });
-    }
-
-    pub fn reload_gdrive_user(&mut self) {
-        self.upload_gdrive_user_email = load_gdrive_user();
-    }
-
-    pub fn gdrive_sign_out(&mut self) {
-        clear_gdrive_auth();
-        self.upload_gdrive_user_email.clear();
     }
 
     // ── VS-rebuild actions ────────────────────────────────────────────────────

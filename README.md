@@ -12,8 +12,10 @@ A Windows desktop tool for Unreal Engine 5 developers: Packages builds, regenera
 | | |
 |---|---|
 | **Rebuild VS Files** | Cleans generated folders, runs `GenerateProjectFiles.bat`, opens the result in Rider or Visual Studio |
-| **Package Game** | Runs UAT `BuildCookRun`, renames the output, zips it, and optionally uploads to Google Drive or copies to a local path |
+| **Package Game** | Runs UAT `BuildCookRun`, renames the output, zips it, and optionally uploads to Google Drive via rclone or copies to a local path |
 | **Git** | Commit & push, sync with main (fetch + rebase), or merge current branch into main |
+| **Cookie Clicker** | Opens [Cookie Clicker](https://orteil.dashnet.org/cookieclicker/) in the default browser |
+| **DM Spencer** | Step-by-step guide for DMing Spencer (`gonkindroid`) on Discord, with a shortcut to [Sponder Bird](https://nicktam1.github.io/SponderBirdNew/) |
 
 ---
 
@@ -36,11 +38,29 @@ Output: `WSL2 Build/x86_64-pc-windows-gnu/release/unreal_devtool.exe`
 
 ---
 
+## Google Drive upload (rclone)
+
+Uploads use [rclone](https://rclone.org/) — install it once and configure a remote named `gdrive` (or any name you choose):
+
+```powershell
+rclone config
+```
+
+Follow the prompts: select **Google Drive**, paste your OAuth Client ID and Secret from [Google Cloud Console](https://console.cloud.google.com/), then link your account in the browser tab that opens. Once done, enter a destination in the upload panel:
+
+```
+gdrive:/Builds/MyGame
+```
+
+rclone must be in your `PATH`. The remote name must match the prefix you used in the destination field.
+
+---
+
 ## Notes
 
 - Config and build names are saved to `%APPDATA%\UnrealDevTool\`
 - Builds version automatically: `v0.0.1`, `v0.0.2`, …
-- Google sign-in happens once; session is cached in `tokencache.json`
+- Google Drive uploads use rclone — no OAuth tokens stored by the app
 - Force push is intentionally not implemented
 - The exe is fully portable — no installer or runtime needed
 

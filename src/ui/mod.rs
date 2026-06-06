@@ -55,9 +55,6 @@ impl eframe::App for DevToolApp {
                 }
             }
 
-            // Refresh the signed-in Google account display after every task
-            // (covers the case where an upload just completed and saved the email)
-            self.reload_gdrive_user();
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -149,10 +146,9 @@ impl DevToolApp {
         } else if self.show_upload_panel {
             let action = self.show_upload_panel_ui(ui);
             match action {
-                UploadAction::Upload  => self.start_upload(),
-                UploadAction::Skip    => { self.show_upload_panel = false; }
-                UploadAction::SignOut => self.gdrive_sign_out(),
-                UploadAction::None    => {}
+                UploadAction::Upload => self.start_upload(),
+                UploadAction::Skip   => { self.show_upload_panel = false; }
+                UploadAction::None   => {}
             }
 
         } else if self.show_package_config {
