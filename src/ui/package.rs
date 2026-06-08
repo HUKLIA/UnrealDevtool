@@ -77,21 +77,80 @@ impl DevToolApp {
                 );
 
                 if self.upload_use_gdrive {
+                    // Check once (lazily) whether the "gdrive" remote exists —
+                    // this reads rclone's local config file, so it's fast.
+                    if self.gdrive_remote_status.is_none() {
+                        self.gdrive_remote_status = Some(crate::ops::package::gdrive_remote_exists());
+                    }
+
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new("rclone destination:").size(11.0).color(egui::Color32::GRAY));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.upload_rclone_dest)
-                            .hint_text("gdrive:/Builds/MyGame")
+                            .hint_text("gdrive:/Builds/MyGame  or a Drive folder share link")
                             .desired_width(f32::INFINITY),
                     );
+
+                    // Live feedback when the pasted value is a Drive share link —
+                    // shows the folder ID that will actually be targeted on upload.
+                    let dest_trim = self.upload_rclone_dest.trim();
+                    if dest_trim.starts_with("http://") || dest_trim.starts_with("https://") {
+                        match crate::ops::package::drive_folder_id_from_url(dest_trim) {
+                            Some(id) => {
+                                ui.colored_label(
+                                    MIKU_TEAL,
+                                    format!("✓ Folder link recognized — will upload into folder ID: {}", id),
+                                );
+                            }
+                            None => {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(255, 150, 60),
+                                    "⚠ Couldn't find a folder ID in that link — paste a folder share link\n  or use rclone path syntax (gdrive:/Builds/MyGame).",
+                                );
+                            }
+                        }
+                    }
+
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(
-                            "Requires rclone in PATH with a configured remote.\n\
-                             Run  rclone config  in PowerShell to set one up.\n\
-                             Example:  gdrive:/Builds/MobiusFish"
+                            "Uses the bundled rclone (or one in PATH) with a remote named \"gdrive\".\n\
+                             Then either:\n\
+                             •  Path syntax:   gdrive:/Builds/MobiusFish\n\
+                             •  Or paste a folder share link — its folder ID is used automatically:\n\
+                                https://drive.google.com/drive/folders/<FOLDER_ID>"
                         ).size(10.0).color(HINT_GRAY),
                     );
+
+                    // Remote status + one-click setup for first-time users.
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        match self.gdrive_remote_status {
+                            Some(true) => {
+                                ui.colored_label(MIKU_TEAL, "✓ \"gdrive\" remote is configured.");
+                            }
+                            Some(false) => {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(255, 150, 60),
+                                    "⚠ No \"gdrive\" remote found.",
+                                );
+                                if ui.add_sized([190.0, 24.0], egui::Button::new("⚙  Set up Google Drive remote…")).clicked() {
+                                    match crate::ops::package::open_rclone_config_setup() {
+                                        Ok(())   => *self.status_message.lock().unwrap() =
+                                            "[INFO] Opened rclone config in a new window — \
+                                             create a remote named \"gdrive\" and sign in via the browser prompt.\n\
+                                             Come back here and click ↻ to refresh once you're done.".to_string(),
+                                        Err(e)   => *self.status_message.lock().unwrap() =
+                                            format!("[ERROR] Could not open rclone config: {}", e),
+                                    }
+                                }
+                            }
+                            None => {}
+                        }
+                        if ui.add_sized([26.0, 24.0], egui::Button::new("↻")).on_hover_text("Re-check remote status").clicked() {
+                            self.gdrive_remote_status = None;
+                        }
+                    });
                 }
 
                 ui.add_space(14.0);

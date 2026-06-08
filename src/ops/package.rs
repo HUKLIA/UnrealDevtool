@@ -200,12 +200,75 @@ pub fn copy_to_local(zip: &Path, dest: &str) -> String {
 
 // ── Post-package: upload to Google Drive via rclone ──────────────────────────
 //
-// Requires rclone (https://rclone.org) installed and in PATH with a remote
-// configured. Set the remote up once with `rclone config` in PowerShell —
-// name it "gdrive" (or whatever prefix you use in the destination field).
+// Uses the rclone copy bundled at Reclone/rclone-v1.74.3-windows-amd64/rclone.exe
+// next to the app (falls back to a "rclone" on PATH if that folder is missing).
+// Either way a remote named "gdrive" must be set up once with `rclone config`
+// in PowerShell — that's what links rclone to your Google account.
 //
-// Example destination:  gdrive:/Builds/MobiusFish
-// Command run:          rclone copy <zip> <rclone_dest>
+// The destination field accepts two forms:
+//   - An rclone path, e.g.            gdrive:/Builds/MobiusFish
+//   - A Drive folder share link, e.g. https://drive.google.com/drive/folders/<ID>
+//     (the folder ID is extracted and passed via --drive-root-folder-id,
+//      still routed through the "gdrive" remote — a share link alone carries
+//      no credentials, so the remote must already have access to that folder)
+
+const BUNDLED_RCLONE: &str = "Reclone/rclone-v1.74.3-windows-amd64/rclone.exe";
+const DRIVE_REMOTE:   &str = "gdrive:";
+
+/// Prefer the rclone.exe bundled next to this app; fall back to PATH lookup.
+fn rclone_program() -> String {
+    if let Ok(exe_dir) = std::env::current_exe().map(|p| p.parent().map(Path::to_path_buf)) {
+        if let Some(dir) = exe_dir {
+            let bundled = dir.join(BUNDLED_RCLONE);
+            if bundled.is_file() {
+                return bundled.to_string_lossy().to_string();
+            }
+        }
+    }
+    "rclone".to_string()
+}
+
+/// Pulls the folder ID out of a Google Drive share link, e.g.
+/// "https://drive.google.com/drive/folders/<ID>?usp=sharing" -> "<ID>"
+/// or  "https://drive.google.com/open?id=<ID>"               -> "<ID>"
+pub fn drive_folder_id_from_url(url: &str) -> Option<String> {
+    let id_chars = |s: &str| -> String {
+        s.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect()
+    };
+    if let Some(rest) = url.split("/folders/").nth(1) {
+        let id = id_chars(rest);
+        if !id.is_empty() { return Some(id); }
+    }
+    if let Some(rest) = url.split("id=").nth(1) {
+        let id = id_chars(rest);
+        if !id.is_empty() { return Some(id); }
+    }
+    None
+}
+
+/// Quick local check (reads rclone's config file, no network) — true if a
+/// remote named "gdrive" is already set up.
+pub fn gdrive_remote_exists() -> bool {
+    let program = rclone_program();
+    match crate::ops::cmd(&program).arg("listremotes").output() {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(|line| line.trim() == DRIVE_REMOTE),
+        Err(_) => false,
+    }
+}
+
+/// Opens a new visible console window running `rclone config`, so the user
+/// can interactively create the "gdrive" remote. The OAuth step opens a
+/// browser for the user to sign in to the Google account that should have
+/// access to the destination folder — that part can't be automated.
+pub fn open_rclone_config_setup() -> std::io::Result<()> {
+    let program = rclone_program();
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "rclone config — set up the \"gdrive\" remote", &program, "config"])
+        .spawn()?;
+    Ok(())
+}
 
 pub fn upload_via_rclone(
     zip:         &Path,
@@ -216,7 +279,7 @@ pub fn upload_via_rclone(
     let dest = rclone_dest.trim();
     if dest.is_empty() {
         return "[ERROR] rclone destination is empty.\n\
-                Enter a path like:  gdrive:/Builds/MyGame".to_string();
+                Enter a path like  gdrive:/Builds/MyGame  or paste a Drive folder share link.".to_string();
     }
     if !zip.exists() {
         return format!("[ERROR] Zip file not found: {}", zip.display());
@@ -225,22 +288,48 @@ pub fn upload_via_rclone(
     let file_name = zip.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "build.zip".to_string());
+    let zip_str = zip.to_string_lossy().to_string();
+
+    // A pasted Drive share link isn't an rclone path — translate it into
+    // "gdrive:" + --drive-root-folder-id so it lands in that exact folder.
+    let (copy_args, target_label, remote_name): (Vec<String>, String, String) =
+        if dest.starts_with("http://") || dest.starts_with("https://") {
+            match drive_folder_id_from_url(dest) {
+                Some(folder_id) => (
+                    vec![
+                        "copy".to_string(), zip_str.clone(), DRIVE_REMOTE.to_string(),
+                        "--drive-root-folder-id".to_string(), folder_id.clone(),
+                    ],
+                    format!("Drive folder {}", folder_id),
+                    DRIVE_REMOTE.trim_end_matches(':').to_string(),
+                ),
+                None => return "[ERROR] Could not find a folder ID in that Google Drive link.\n\
+                                Paste a folder link like:\n\
+                                https://drive.google.com/drive/folders/<FOLDER_ID>\n\
+                                or use rclone path syntax:  gdrive:/Builds/MyGame".to_string(),
+            }
+        } else {
+            let remote = dest.split(':').next().unwrap_or(dest).to_string();
+            (vec!["copy".to_string(), zip_str.clone(), dest.to_string()], dest.to_string(), remote)
+        };
 
     *status.lock().unwrap() = format!(
         "[UPLOADING] Sending {}  ->  {}\n(via rclone — this may take a while for large builds)",
-        file_name, dest,
+        file_name, target_label,
     );
 
-    let mut child = match crate::ops::cmd("rclone")
-        .args(["copy", &zip.to_string_lossy(), dest])
+    let program = rclone_program();
+    let mut child = match crate::ops::cmd(&program)
+        .args(&copy_args)
         .spawn()
     {
         Ok(c)  => c,
         Err(e) => return format!(
-            "[ERROR] Could not launch rclone: {}\n\
-             Make sure rclone is installed and available in your PATH.\n\
+            "[ERROR] Could not launch rclone ({}): {}\n\
+             Make sure rclone is installed and available in your PATH,\n\
+             or that the bundled copy exists at:  {}\n\
              Download: https://rclone.org/",
-            e
+            program, e, BUNDLED_RCLONE
         ),
     };
 
@@ -253,12 +342,13 @@ pub fn upload_via_rclone(
         match child.try_wait() {
             Ok(Some(code)) => {
                 return if code.success() {
-                    format!("[DONE] Uploaded {} to {}", file_name, dest)
+                    format!("[DONE] Uploaded {} to {}", file_name, target_label)
                 } else {
                     format!(
                         "[ERROR] rclone exited with code {}.\n\
-                         Check that your remote name and destination path are correct.",
-                        code.code().unwrap_or(-1)
+                         Check that the \"{}\" remote is configured (run  rclone config)\n\
+                         and has access to the destination.",
+                        code.code().unwrap_or(-1), remote_name
                     )
                 };
             }

@@ -51,6 +51,7 @@ pub struct DevToolApp {
     pub upload_use_gdrive:  bool,
     pub upload_local_path:  String,
     pub upload_rclone_dest: String,   // e.g. "gdrive:/Builds/MyGame"
+    pub gdrive_remote_status: Option<bool>, // None = not checked yet, Some(found?)
 
     // Git state machine
     pub git_state:               GitState,
@@ -115,6 +116,7 @@ impl DevToolApp {
             upload_use_gdrive:  false,
             upload_local_path:  upload_cfg.local_path,
             upload_rclone_dest: upload_cfg.rclone_dest,
+            gdrive_remote_status: None,
             git_state:               GitState::Idle,
             git_next_state:          GitState::Idle,
             git_result:              Arc::new(Mutex::new(None)),
