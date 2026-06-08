@@ -22,6 +22,7 @@ impl eframe::App for DevToolApp {
         let just_finished = self.was_working && !is_busy;
         self.was_working = is_busy;
         if just_finished {
+            if let Some(a) = &mut self.audio_player { a.stop(); }
             let git_status = self.git_result.lock().unwrap().take();
             if let Some(gs) = git_status {
                 match gs {
@@ -108,6 +109,31 @@ impl DevToolApp {
                     }
                 });
             });
+
+        let audio_playing = self.audio_player.as_ref().map_or(false, |a| a.is_playing());
+        if audio_playing {
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space((ui.available_width() - 280.0).max(0.0) / 2.0);
+
+                    let mute_icon = if self.audio_muted { "🔇" } else { "🔊" };
+                    if ui.add_sized([28.0, 22.0], egui::Button::new(mute_icon)).clicked() {
+                        let muted = !self.audio_muted;
+                        self.set_audio_muted(muted);
+                    }
+
+                    let mut volume = self.audio_volume;
+                    let resp = ui.add_enabled(
+                        !self.audio_muted,
+                        egui::Slider::new(&mut volume, 0..=100).text("volume"),
+                    );
+                    if resp.changed() {
+                        self.set_audio_volume(volume);
+                    }
+                });
+            });
+        }
 
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {

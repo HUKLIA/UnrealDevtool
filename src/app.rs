@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+use crate::audio::AudioPlayer;
 use crate::config::{
-    load_project_config, load_project_path, load_upload_config,
-    save_project_config, save_project_path, save_upload_config, UploadConfig,
+    load_audio_config, load_project_config, load_project_path, load_upload_config,
+    save_audio_config, save_project_config, save_project_path, save_upload_config,
+    AudioConfig, UploadConfig,
 };
 use crate::engine::{build_init_status, detect_unreal_engine};
 use crate::gif::GifPlayer;
@@ -24,6 +26,9 @@ pub struct DevToolApp {
     pub is_working:           Arc<Mutex<bool>>,
     pub was_working:          bool,
     pub gif_player:           Option<GifPlayer>,
+    pub audio_player:         Option<AudioPlayer>,
+    pub audio_muted:          bool,
+    pub audio_volume:         u32,
     pub busy_label:           String,
     pub cancel_flag:          Arc<AtomicBool>,
     pub progress:             Arc<Mutex<f32>>,
@@ -76,6 +81,12 @@ impl DevToolApp {
             .unwrap_or_default();
         let gif_player  = GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif"));
         let upload_cfg  = load_upload_config();
+        let audio_cfg   = load_audio_config();
+        let audio_player = AudioPlayer::new(
+            include_bytes!("../Sound/Ievan Polkka.mp3"),
+            audio_cfg.muted,
+            audio_cfg.volume,
+        );
         Self {
             engine_dir,
             project_path,
@@ -85,6 +96,9 @@ impl DevToolApp {
             is_working:  Arc::new(Mutex::new(false)),
             was_working: false,
             gif_player,
+            audio_player,
+            audio_muted:  audio_cfg.muted,
+            audio_volume: audio_cfg.volume,
             busy_label:  String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             progress:    Arc::new(Mutex::new(0.0_f32)),
@@ -140,6 +154,20 @@ impl DevToolApp {
         self.project_path.as_ref()?.parent().map(|p| p.to_path_buf())
     }
 
+    // ── Packaging-sound controls ──────────────────────────────────────────────
+
+    pub fn set_audio_muted(&mut self, muted: bool) {
+        self.audio_muted = muted;
+        if let Some(a) = &mut self.audio_player { a.set_muted(muted); }
+        save_audio_config(&AudioConfig { muted: self.audio_muted, volume: self.audio_volume });
+    }
+
+    pub fn set_audio_volume(&mut self, volume: u32) {
+        self.audio_volume = volume;
+        if let Some(a) = &mut self.audio_player { a.set_volume(volume); }
+        save_audio_config(&AudioConfig { muted: self.audio_muted, volume: self.audio_volume });
+    }
+
     // ── Package actions ───────────────────────────────────────────────────────
 
     pub fn open_package_config(&mut self) {
@@ -176,6 +204,7 @@ impl DevToolApp {
         self.show_package_config = false;
         self.busy_label = "◈  PACKAGING IN PROGRESS  ◈".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
+        if let Some(a) = &mut self.audio_player { a.play_looping(); }
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);

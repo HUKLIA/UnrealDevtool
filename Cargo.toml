@@ -8,6 +8,7 @@ eframe  = "0.27.2"                               # GUI framework
 winreg  = "0.52.0"                               # Find Unreal Engine via registry
 rfd     = "0.14"                                 # Native file/folder picker
 image   = { version = "0.25", features = ["gif"] } # GIF frame decoding
+rodio   = { version = "0.22", default-features = false, features = ["playback", "mp3"] } # MP3 playback
 
 [profile.release]
 opt-level   = 3       # full optimisation

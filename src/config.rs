@@ -94,3 +94,37 @@ pub fn save_upload_config(cfg: &UploadConfig) {
         let _ = fs::write(dir.join("upload.cfg"), format!("{}\n{}", cfg.local_path, cfg.rclone_dest));
     }
 }
+
+// ── Packaging sound config (`audio.cfg`) ─────────────────────────────────────
+// Line 1: muted    ("1" or "0")
+// Line 2: volume   (0-100)
+
+pub struct AudioConfig {
+    pub muted:  bool,
+    pub volume: u32,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self { muted: false, volume: 50 }
+    }
+}
+
+pub fn load_audio_config() -> AudioConfig {
+    let path = match config_dir() { Some(d) => d.join("audio.cfg"), None => return AudioConfig::default() };
+    let content = match fs::read_to_string(&path) { Ok(s) => s, Err(_) => return AudioConfig::default() };
+    let mut lines = content.lines();
+    let muted  = lines.next().map(|s| s.trim() == "1").unwrap_or(false);
+    let volume = lines.next()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map(|v| v.min(100))
+        .unwrap_or(50);
+    AudioConfig { muted, volume }
+}
+
+pub fn save_audio_config(cfg: &AudioConfig) {
+    if let Some(dir) = config_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join("audio.cfg"), format!("{}\n{}", if cfg.muted { 1 } else { 0 }, cfg.volume));
+    }
+}
