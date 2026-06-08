@@ -202,7 +202,7 @@ impl DevToolApp {
         }
         save_project_config(&project_path, &pack_name, &exe_name);
         self.show_package_config = false;
-        self.busy_label = "◈  PACKAGING IN PROGRESS  ◈".into();
+        self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         if let Some(a) = &mut self.audio_player { a.play_looping(); }
         let status_clone  = Arc::clone(&self.status_message);
@@ -236,7 +236,7 @@ impl DevToolApp {
         let progress    = Arc::clone(&self.progress);
 
         self.show_upload_panel = false;
-        self.busy_label = "◈  UPLOADING BUILD  ◈".into();
+        self.busy_label = "[ UPLOADING BUILD ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
 
         self.run_background_task("Starting upload…", move || {
@@ -278,7 +278,7 @@ impl DevToolApp {
         };
         let ide = self.ide_choice;
         self.show_vs_config = false;
-        self.busy_label = "◈  GENERATING PROJECT FILES  ◈".into();
+        self.busy_label = "[ GENERATING PROJECT FILES ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         let status_clone = Arc::clone(&self.status_message);
         let cancel       = Arc::clone(&self.cancel_flag);
@@ -308,7 +308,7 @@ impl DevToolApp {
         let status = Arc::clone(&self.status_message);
         let result = Arc::clone(&self.git_result);
         self.git_next_state = GitState::AfterPush;
-        self.busy_label     = "◈  COMMITTING & PUSHING  ◈".into();
+        self.busy_label     = "[ COMMITTING & PUSHING ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
@@ -324,7 +324,7 @@ impl DevToolApp {
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
-        self.busy_label     = "◈  SYNCING WITH MAIN  ◈".into();
+        self.busy_label     = "[ SYNCING WITH MAIN ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Fetching origin/main…", move || {
             ops_git::task_git_sync(dir, status, result, cancel, progress)
@@ -345,7 +345,7 @@ impl DevToolApp {
         let progress    = Arc::clone(&self.progress);
         self.git_merged_from = from_branch.clone();
         self.git_next_state  = GitState::AfterMerge;
-        self.busy_label      = "◈  MERGING TO MAIN  ◈".into();
+        self.busy_label      = "[ MERGING TO MAIN ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Switching to main…", move || {
             ops_git::task_git_merge_to_main(dir, from_branch, status, result, cancel, progress)
@@ -359,7 +359,7 @@ impl DevToolApp {
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
-        self.busy_label     = "◈  SWITCHING BRANCH  ◈".into();
+        self.busy_label     = "[ SWITCHING BRANCH ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Switching branch…", move || {
             ops_git::task_git_checkout(dir, branch, status, result, cancel, progress)
@@ -373,7 +373,7 @@ impl DevToolApp {
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
-        self.busy_label     = "◈  CREATING BRANCH  ◈".into();
+        self.busy_label     = "[ CREATING BRANCH ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         self.run_background_task("Creating branch…", move || {
             ops_git::task_git_create_branch(dir, name, status, result, cancel, progress)
