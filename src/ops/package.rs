@@ -217,12 +217,22 @@ const DRIVE_REMOTE:   &str = "gdrive:";
 
 /// Prefer the rclone.exe bundled next to this app; fall back to PATH lookup.
 fn rclone_program() -> String {
-    if let Ok(exe_dir) = std::env::current_exe().map(|p| p.parent().map(Path::to_path_buf)) {
-        if let Some(dir) = exe_dir {
-            let bundled = dir.join(BUNDLED_RCLONE);
-            if bundled.is_file() {
-                return bundled.to_string_lossy().to_string();
-            }
+    // 1. Released app: Reclone/ is distributed alongside the exe.
+    if let Ok(Some(dir)) = std::env::current_exe().map(|p| p.parent().map(Path::to_path_buf)) {
+        let bundled = dir.join(BUNDLED_RCLONE);
+        if bundled.is_file() {
+            return bundled.to_string_lossy().to_string();
+        }
+    }
+    // 2. Dev build (`cargo run`): Reclone/ lives at the repo root, not next to
+    //    the exe in target/debug. CARGO_MANIFEST_DIR is the repo root, baked in
+    //    at compile time. Excluded from release builds so it never resolves to a
+    //    developer's machine path on an end-user's system.
+    #[cfg(debug_assertions)]
+    {
+        let dev_bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join(BUNDLED_RCLONE);
+        if dev_bundled.is_file() {
+            return dev_bundled.to_string_lossy().to_string();
         }
     }
     "rclone".to_string()
