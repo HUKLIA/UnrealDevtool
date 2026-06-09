@@ -91,7 +91,35 @@ impl DevToolApp {
             ui.add_space(6.0);
         }
         let dt = ctx.input(|i| i.stable_dt);
-        if let Some(gif) = &mut self.gif_player { gif.advance(ctx, dt); }
+        if !self.miku_mode_3d {
+            if let Some(gif) = &mut self.gif_player { gif.advance(ctx, dt); }
+        }
+
+        // ── 2D / 3D toggle ────────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Miku:").size(11.0).color(HINT_GRAY));
+
+            let active   = egui::Color32::from_rgb(0, 180, 160);
+            let inactive = egui::Color32::from_rgb(40, 40, 55);
+
+            let btn2d = egui::Button::new(egui::RichText::new("2D").size(11.0))
+                .fill(if !self.miku_mode_3d { active } else { inactive });
+            if ui.add_sized([36.0, 20.0], btn2d).clicked() && self.miku_mode_3d {
+                self.miku_mode_3d = false;
+                if let Some(g) = &mut self.gif_player { g.reset(); }
+            }
+
+            let btn3d = egui::Button::new(egui::RichText::new("3D").size(11.0))
+                .fill(if self.miku_mode_3d { active } else { inactive });
+            if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
+                self.miku_mode_3d = true;
+                let _ = std::process::Command::new("cmd")
+                    .args(["/C", "start", "", "https://huklia.github.io/MikuTest/"])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn();
+            }
+        });
+        ui.add_space(4.0);
 
         let gif_size = egui::vec2(300.0, 252.0);
         egui::Frame::none()
@@ -101,7 +129,14 @@ impl DevToolApp {
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    if let Some(gif) = &self.gif_player {
+                    if self.miku_mode_3d {
+                        ui.add_space(gif_size.y * 0.35);
+                        ui.colored_label(MIKU_TEAL, "3D Miku is open in your browser");
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("(switch back to 2D to resume the GIF)")
+                            .size(10.0).color(HINT_GRAY));
+                        ui.add_space(gif_size.y * 0.35);
+                    } else if let Some(gif) = &self.gif_player {
                         gif.show(ui, gif_size);
                     } else {
                         ui.add_space(gif_size.y);

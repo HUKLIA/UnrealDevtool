@@ -69,6 +69,9 @@ pub struct DevToolApp {
 
     // Extras
     pub show_dm_spencer_panel: bool,
+
+    // Miku view mode: false = 2D gif (default), true = 3D web
+    pub miku_mode_3d: bool,
 }
 
 impl DevToolApp {
@@ -128,6 +131,7 @@ impl DevToolApp {
             show_open_folder_panel:    false,
             pending_open_folder_path:  std::path::PathBuf::new(),
             show_dm_spencer_panel:     false,
+            miku_mode_3d:              false,
         }
     }
 
