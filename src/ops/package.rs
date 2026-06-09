@@ -212,27 +212,32 @@ pub fn copy_to_local(zip: &Path, dest: &str) -> String {
 //      still routed through the "gdrive" remote — a share link alone carries
 //      no credentials, so the remote must already have access to that folder)
 
-const BUNDLED_RCLONE: &str = "Reclone/rclone-v1.74.3-windows-amd64/rclone.exe";
-const DRIVE_REMOTE:   &str = "gdrive:";
+const DRIVE_REMOTE: &str = "gdrive:";
 
-/// Prefer the rclone.exe bundled next to this app; fall back to PATH lookup.
+// rclone.exe is embedded directly into this binary at compile time.
+// On first use it is extracted to %APPDATA%\UnrealDevtool\rclone\rclone.exe
+// and reused from there on subsequent runs.
+static RCLONE_EXE_BYTES: &[u8] =
+    include_bytes!("../../Reclone/rclone-v1.74.3-windows-amd64/rclone.exe");
+
+fn rclone_appdata_path() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(Path::new(&appdata).join("UnrealDevtool").join("rclone").join("rclone.exe"))
+}
+
+/// Returns a path to rclone.exe, extracting the embedded copy to %APPDATA% if
+/// it hasn't been extracted yet. Falls back to a PATH lookup if that fails.
 fn rclone_program() -> String {
-    // 1. Released app: Reclone/ is distributed alongside the exe.
-    if let Ok(Some(dir)) = std::env::current_exe().map(|p| p.parent().map(Path::to_path_buf)) {
-        let bundled = dir.join(BUNDLED_RCLONE);
-        if bundled.is_file() {
-            return bundled.to_string_lossy().to_string();
+    if let Some(dest) = rclone_appdata_path() {
+        if dest.is_file() {
+            return dest.to_string_lossy().to_string();
         }
-    }
-    // 2. Dev build (`cargo run`): Reclone/ lives at the repo root, not next to
-    //    the exe in target/debug. CARGO_MANIFEST_DIR is the repo root, baked in
-    //    at compile time. Excluded from release builds so it never resolves to a
-    //    developer's machine path on an end-user's system.
-    #[cfg(debug_assertions)]
-    {
-        let dev_bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join(BUNDLED_RCLONE);
-        if dev_bundled.is_file() {
-            return dev_bundled.to_string_lossy().to_string();
+        if let Some(parent) = dest.parent() {
+            if std::fs::create_dir_all(parent).is_ok()
+                && std::fs::write(&dest, RCLONE_EXE_BYTES).is_ok()
+            {
+                return dest.to_string_lossy().to_string();
+            }
         }
     }
     "rclone".to_string()
@@ -336,10 +341,8 @@ pub fn upload_via_rclone(
         Ok(c)  => c,
         Err(e) => return format!(
             "[ERROR] Could not launch rclone ({}): {}\n\
-             Make sure rclone is installed and available in your PATH,\n\
-             or that the bundled copy exists at:  {}\n\
              Download: https://rclone.org/",
-            program, e, BUNDLED_RCLONE
+            program, e
         ),
     };
 

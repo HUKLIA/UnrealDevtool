@@ -55,13 +55,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bundle exe and rclone into zip
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path dist
-          Copy-Item target\x86_64-pc-windows-msvc\release\unreal_devtool.exe dist\
-          Copy-Item -Recurse Reclone dist\
-          Compress-Archive -Path dist\* -DestinationPath unreal_devtool.zip
+      - name: Stage release artifact
+        run: Copy-Item target\x86_64-pc-windows-msvc\release\unreal_devtool.exe unreal_devtool.exe
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -70,5 +65,5 @@ jobs:
           name: "${{ steps.version.outputs.tag }}"
           body: |
             Automated build from commit ${{ github.sha }} on `main`.
-          files: unreal_devtool.zip
+          files: unreal_devtool.exe
           make_latest: true
