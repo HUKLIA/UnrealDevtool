@@ -10,6 +10,7 @@ mod ops;
 mod theme;
 mod types;
 mod ui;
+mod webview;
 
 use eframe::egui;
 

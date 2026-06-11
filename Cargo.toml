@@ -9,6 +9,8 @@ winreg  = "0.52.0"                               # Find Unreal Engine via regist
 rfd     = "0.14"                                 # Native file/folder picker
 image   = { version = "0.25", features = ["gif"] } # GIF frame decoding
 rodio   = { version = "0.22", default-features = false, features = ["playback", "mp3"] } # MP3 playback
+wry               = "0.40"                       # Embedded WebView2 (Cookie Clicker / Sponder Bird / 3D Miku)
+raw-window-handle = "0.6"                        # Bridge winit's window handle to wry
 
 [profile.release]
 opt-level   = 3       # full optimisation

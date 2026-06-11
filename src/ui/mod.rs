@@ -8,8 +8,6 @@ use crate::config::{clear_project_path, save_project_path};
 use crate::theme::*;
 use crate::types::{GitAction, GitState, GitTaskStatus, UploadAction};
 use std::sync::atomic::Ordering;
-use std::os::windows::process::CommandExt;
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 // ── eframe::App — the main update loop ───────────────────────────────────────
 
@@ -58,6 +56,8 @@ impl eframe::App for DevToolApp {
 
         }
 
+        self.pending_webview = None;
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(4.0);
             ui.heading(egui::RichText::new("Unreal Master Toolbox").color(egui::Color32::WHITE));
@@ -75,6 +75,13 @@ impl eframe::App for DevToolApp {
             ui.add_space(4.0);
             self.show_status_area(ui);
         });
+
+        // Sync the embedded WebView2 panel (3D Miku / Cookie Clicker / Sponder
+        // Bird) to whatever panel (if any) requested space this frame.
+        let ppp = ctx.pixels_per_point();
+        if let Some(err) = self.webview_manager.update(self.pending_webview, ppp) {
+            self.set_status(err);
+        }
     }
 }
 
@@ -113,10 +120,6 @@ impl DevToolApp {
                 .fill(if self.miku_mode_3d { active } else { inactive });
             if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
                 self.miku_mode_3d = true;
-                let _ = std::process::Command::new("cmd")
-                    .args(["/C", "start", "", "https://huklia.github.io/MikuTest/"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .spawn();
             }
         });
         ui.add_space(4.0);
@@ -130,12 +133,8 @@ impl DevToolApp {
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     if self.miku_mode_3d {
-                        ui.add_space(gif_size.y * 0.35);
-                        ui.colored_label(MIKU_TEAL, "3D Miku is open in your browser");
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new("(switch back to 2D to resume the GIF)")
-                            .size(10.0).color(HINT_GRAY));
-                        ui.add_space(gif_size.y * 0.35);
+                        let (rect, _) = ui.allocate_exact_size(gif_size, egui::Sense::hover());
+                        self.pending_webview = Some((crate::webview::WebPanel::Miku3D, rect));
                     } else if let Some(gif) = &self.gif_player {
                         gif.show(ui, gif_size);
                     } else {
@@ -201,7 +200,10 @@ impl DevToolApp {
         ui.separator();
         ui.add_space(10.0);
 
-        if self.show_open_folder_panel {
+        if let Some(panel) = self.active_web_panel {
+            self.show_web_panel_ui(ui, panel);
+
+        } else if self.show_open_folder_panel {
             self.show_open_folder_panel(ui);
 
         } else if self.show_upload_panel {
@@ -265,15 +267,30 @@ impl DevToolApp {
 
         let w = [ui.available_width(), 40.0];
         if ui.add_sized(w, egui::Button::new("🍪  Cookie Clicker")).clicked() {
-            let _ = std::process::Command::new("cmd")
-                .args(["/C", "start", "", "https://orteil.dashnet.org/cookieclicker/"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn();
+            self.active_web_panel = Some(crate::webview::WebPanel::CookieClicker);
         }
         ui.add_space(8.0);
         if ui.add_sized(w, egui::Button::new("💬  DM Spencer")).clicked() {
             self.show_dm_spencer_panel = true;
         }
+    }
+
+    /// Renders an embedded web page (Cookie Clicker, Sponder Bird, 3D Miku)
+    /// with a "< Back" button. The actual WebView2 control is positioned by
+    /// `WebViewManager::update` after this frame's layout is known.
+    pub fn show_web_panel_ui(&mut self, ui: &mut egui::Ui, panel: crate::webview::WebPanel) {
+        ui.horizontal(|ui| {
+            if ui.add_sized([90.0, 26.0], egui::Button::new("< Back")).clicked() {
+                self.active_web_panel = None;
+            }
+            ui.add_space(8.0);
+            ui.colored_label(MIKU_TEAL, panel.title());
+        });
+        ui.add_space(6.0);
+
+        let avail = ui.available_size();
+        let (rect, _) = ui.allocate_exact_size(avail, egui::Sense::hover());
+        self.pending_webview = Some((panel, rect));
     }
 
     pub fn show_dm_spencer_panel(&mut self, ui: &mut egui::Ui) {
@@ -318,10 +335,7 @@ impl DevToolApp {
                 }
                 ui.add_space(8.0);
                 if ui.add_sized([160.0, 28.0], egui::Button::new("🐦  Play Sponder Bird")).clicked() {
-                    let _ = std::process::Command::new("cmd")
-                        .args(["/C", "start", "", "https://nicktam1.github.io/SponderBirdNew/"])
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .spawn();
+                    self.active_web_panel = Some(crate::webview::WebPanel::SponderBird);
                 }
             });
         });

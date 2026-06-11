@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+use eframe::egui;
+
 use crate::audio::AudioPlayer;
 use crate::config::{
     load_audio_config, load_project_config, load_project_path, load_upload_config,
@@ -14,6 +16,8 @@ use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, vs as ops_vs};
 use crate::theme::apply_miku_theme;
 use crate::types::{GitState, GitTaskStatus, IdeChoice};
+use crate::webview::{WebPanel, WebViewManager};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 // ── Application state ─────────────────────────────────────────────────────────
 
@@ -72,6 +76,11 @@ pub struct DevToolApp {
 
     // Miku view mode: false = 2D gif (default), true = 3D web
     pub miku_mode_3d: bool,
+
+    // Embedded WebView2 panels (3D Miku, Cookie Clicker, Sponder Bird)
+    pub webview_manager:  WebViewManager,
+    pub active_web_panel: Option<WebPanel>,
+    pub pending_webview:  Option<(WebPanel, egui::Rect)>,
 }
 
 impl DevToolApp {
@@ -84,6 +93,9 @@ impl DevToolApp {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
         let gif_player  = GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif"));
+        let raw_window  = cc.window_handle().expect("no window handle").as_raw();
+        let raw_display = cc.display_handle().expect("no display handle").as_raw();
+        let webview_manager = WebViewManager::new(raw_window, raw_display);
         let upload_cfg  = load_upload_config();
         let audio_cfg   = load_audio_config();
         let audio_player = AudioPlayer::new(
@@ -132,6 +144,9 @@ impl DevToolApp {
             pending_open_folder_path:  std::path::PathBuf::new(),
             show_dm_spencer_panel:     false,
             miku_mode_3d:              false,
+            webview_manager,
+            active_web_panel: None,
+            pending_webview:  None,
         }
     }
 
