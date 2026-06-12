@@ -102,9 +102,19 @@ impl WebViewManager {
         let bounds = to_physical_bounds(rect, pixels_per_point);
 
         let entry = self.views.entry(panel).or_insert_with(|| ViewEntry {
+            // Some embedded pages (e.g. Unity WebGL's error handler) call
+            // `alert()` on uncaught errors such as the Pointer Lock cooldown
+            // SecurityError. A blocking native alert inside a child webview
+            // is bad UX, so silence `alert`/`confirm`/`prompt` and let the
+            // page keep running.
             view: WebViewBuilder::new_as_child(&self.parent)
                 .with_url(panel.url())
                 .with_bounds(make_rect(bounds))
+                .with_initialization_script(
+                    "window.alert = function(){}; \
+                     window.confirm = function(){ return true; }; \
+                     window.prompt = function(){ return null; };",
+                )
                 .build()
                 .map_err(|e| e.to_string()),
             bounds,
