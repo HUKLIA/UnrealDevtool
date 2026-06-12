@@ -54,12 +54,23 @@ impl HasDisplayHandle for ParentWindow {
     }
 }
 
+/// A created (or failed) webview plus the bounds/visibility we last applied
+/// to it, so `update` can skip redundant `set_bounds`/`set_visible` calls.
+/// Calling these every frame causes WebView2 to repeatedly drop focus, which
+/// breaks the Pointer Lock API used by Unity WebGL content (e.g. 3D Miku)
+/// with a "user has exited the lock" SecurityError.
+struct ViewEntry {
+    view:    Result<WebView, String>,
+    bounds:  (i32, i32, u32, u32),
+    visible: bool,
+}
+
 /// Lazily creates embedded WebView2 child windows for the app's web panels
 /// and shows/hides/repositions them to follow an egui placeholder rect.
 /// Only one panel is visible at a time.
 pub struct WebViewManager {
     parent: ParentWindow,
-    views:  HashMap<WebPanel, Result<WebView, String>>,
+    views:  HashMap<WebPanel, ViewEntry>,
     active: Option<WebPanel>,
 }
 
@@ -77,28 +88,39 @@ impl WebViewManager {
 
         if self.active != wanted_panel {
             if let Some(prev) = self.active {
-                if let Some(Ok(v)) = self.views.get(&prev) {
-                    let _ = v.set_visible(false);
+                if let Some(entry) = self.views.get_mut(&prev) {
+                    if let Ok(v) = &entry.view {
+                        let _ = v.set_visible(false);
+                    }
+                    entry.visible = false;
                 }
             }
             self.active = wanted_panel;
         }
 
         let (panel, rect) = wanted?;
-        let bounds = to_physical_rect(rect, pixels_per_point);
+        let bounds = to_physical_bounds(rect, pixels_per_point);
 
-        let view = self.views.entry(panel).or_insert_with(|| {
-            WebViewBuilder::new_as_child(&self.parent)
+        let entry = self.views.entry(panel).or_insert_with(|| ViewEntry {
+            view: WebViewBuilder::new_as_child(&self.parent)
                 .with_url(panel.url())
-                .with_bounds(bounds)
+                .with_bounds(make_rect(bounds))
                 .build()
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string()),
+            bounds,
+            visible: true,
         });
 
-        match view {
+        match &entry.view {
             Ok(v) => {
-                let _ = v.set_bounds(bounds);
-                let _ = v.set_visible(true);
+                if entry.bounds != bounds {
+                    let _ = v.set_bounds(make_rect(bounds));
+                    entry.bounds = bounds;
+                }
+                if !entry.visible {
+                    let _ = v.set_visible(true);
+                    entry.visible = true;
+                }
                 None
             }
             Err(e) => Some(format!("[ERROR] Could not load {}: {}", panel.title(), e)),
@@ -106,14 +128,18 @@ impl WebViewManager {
     }
 }
 
-fn to_physical_rect(rect: egui::Rect, ppp: f32) -> Rect {
-    let pos = PhysicalPosition::new(
+fn to_physical_bounds(rect: egui::Rect, ppp: f32) -> (i32, i32, u32, u32) {
+    (
         (rect.min.x * ppp).round() as i32,
         (rect.min.y * ppp).round() as i32,
-    );
-    let size = PhysicalSize::new(
         (rect.width()  * ppp).round().max(0.0) as u32,
         (rect.height() * ppp).round().max(0.0) as u32,
-    );
-    Rect { position: Position::Physical(pos), size: Size::Physical(size) }
+    )
+}
+
+fn make_rect((x, y, w, h): (i32, i32, u32, u32)) -> Rect {
+    Rect {
+        position: Position::Physical(PhysicalPosition::new(x, y)),
+        size:     Size::Physical(PhysicalSize::new(w, h)),
+    }
 }
