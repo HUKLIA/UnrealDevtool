@@ -1,5 +1,6 @@
 pub mod git;
 pub mod package;
+pub mod update;
 pub mod vs;
 
 use std::process::Command;

@@ -13,7 +13,8 @@ use crate::config::{
 };
 use crate::engine::{build_init_status, detect_unreal_engine};
 use crate::gif::GifPlayer;
-use crate::ops::{git as ops_git, package as ops_package, vs as ops_vs};
+use crate::ops::{git as ops_git, package as ops_package, update as ops_update, vs as ops_vs};
+use crate::ops::update::UpdateInfo;
 use crate::theme::apply_miku_theme;
 use crate::types::{GitState, GitTaskStatus, IdeChoice};
 use crate::webview::{WebPanel, WebViewManager};
@@ -81,6 +82,10 @@ pub struct DevToolApp {
     pub webview_manager:  WebViewManager,
     pub active_web_panel: Option<WebPanel>,
     pub pending_webview:  Option<(WebPanel, egui::Rect)>,
+
+    // Self-update
+    pub update_info:        Arc<Mutex<Option<UpdateInfo>>>,
+    pub show_update_banner: bool,
 }
 
 impl DevToolApp {
@@ -103,7 +108,7 @@ impl DevToolApp {
             audio_cfg.muted,
             audio_cfg.volume,
         );
-        Self {
+        let app = Self {
             engine_dir,
             project_path,
             project_path_input,
@@ -147,7 +152,12 @@ impl DevToolApp {
             webview_manager,
             active_web_panel: None,
             pending_webview:  None,
-        }
+            update_info:        Arc::new(Mutex::new(None)),
+            show_update_banner: true,
+        };
+        ops_update::cleanup_old_binary();
+        app.check_for_updates();
+        app
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
@@ -173,6 +183,38 @@ impl DevToolApp {
 
     pub fn git_project_dir(&self) -> Option<PathBuf> {
         self.project_path.as_ref()?.parent().map(|p| p.to_path_buf())
+    }
+
+    // ── Self-update ───────────────────────────────────────────────────────────
+
+    /// Ask GitHub for the latest release in the background; updates `update_info`
+    /// (read by the UI) if a newer build is available.
+    pub fn check_for_updates(&self) {
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let update_info = Arc::clone(&self.update_info);
+        thread::spawn(move || {
+            if let Ok(Some(info)) = ops_update::check_for_update(&current_version) {
+                *update_info.lock().unwrap() = Some(info);
+            }
+        });
+    }
+
+    /// Download the latest release exe, swap it in for the running one, and
+    /// relaunch. On success the app exits; on failure the error is reported
+    /// in the status area.
+    pub fn start_update_install(&mut self, download_url: String) {
+        self.show_update_banner = false;
+        self.busy_label = "[ DOWNLOADING UPDATE ]".into();
+        if let Some(g) = &mut self.gif_player { g.reset(); }
+        let status   = Arc::clone(&self.status_message);
+        let cancel   = Arc::clone(&self.cancel_flag);
+        let progress = Arc::clone(&self.progress);
+        self.run_background_task("Downloading update…", move || {
+            match ops_update::download_and_install(&download_url, &status, &cancel, &progress) {
+                Ok(())   => std::process::exit(0),
+                Err(e)   => format!("[ERROR] Update failed: {e}"),
+            }
+        });
     }
 
     // ── Packaging-sound controls ──────────────────────────────────────────────

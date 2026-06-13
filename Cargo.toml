@@ -11,6 +11,8 @@ image   = { version = "0.25", features = ["gif"] } # GIF frame decoding
 rodio   = { version = "0.22", default-features = false, features = ["playback", "mp3"] } # MP3 playback
 wry               = "0.40"                       # Embedded WebView2 (Cookie Clicker / Sponder Bird / 3D Miku)
 raw-window-handle = "0.6"                        # Bridge winit's window handle to wry
+ureq    = { version = "2.10", features = ["json", "tls"] } # GitHub release check / self-update download
+serde   = { version = "1", features = ["derive"] }          # Parse GitHub release JSON
 
 [profile.release]
 opt-level   = 3       # full optimisation

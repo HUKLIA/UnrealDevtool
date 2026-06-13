@@ -195,6 +195,10 @@ impl DevToolApp {
     }
 
     pub fn show_idle_view(&mut self, ui: &mut egui::Ui) {
+        if let Some(download_url) = self.show_update_banner_ui(ui) {
+            self.start_update_install(download_url);
+        }
+
         self.show_project_path_row(ui);
         ui.add_space(10.0);
         ui.separator();
@@ -238,6 +242,41 @@ impl DevToolApp {
         } else {
             self.show_action_buttons(ui);
         }
+    }
+
+    /// If a newer release was found by the background update check, show a
+    /// dismissible banner. Returns `Some(download_url)` if the user clicked
+    /// "Update Now".
+    pub fn show_update_banner_ui(&mut self, ui: &mut egui::Ui) -> Option<String> {
+        if !self.show_update_banner { return None; }
+        let info = self.update_info.lock().unwrap().clone()?;
+
+        let mut clicked_update = false;
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(35, 55, 50))
+            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .rounding(egui::Rounding::same(6.0))
+            .inner_margin(egui::Margin::same(8.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.colored_label(MIKU_TEAL, format!("Update available: {}", info.version));
+                        ui.label(egui::RichText::new(format!("Released {}", info.published_at))
+                            .size(11.0).color(HINT_GRAY));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_sized([60.0, 24.0], egui::Button::new("Dismiss")).clicked() {
+                            self.show_update_banner = false;
+                        }
+                        if ui.add_sized([100.0, 24.0], egui::Button::new("Update Now")).clicked() {
+                            clicked_update = true;
+                        }
+                    });
+                });
+            });
+        ui.add_space(8.0);
+
+        if clicked_update { Some(info.download_url) } else { None }
     }
 
     pub fn show_action_buttons(&mut self, ui: &mut egui::Ui) {
