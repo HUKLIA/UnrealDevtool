@@ -128,3 +128,35 @@ pub fn save_audio_config(cfg: &AudioConfig) {
         let _ = fs::write(dir.join("audio.cfg"), format!("{}\n{}", if cfg.muted { 1 } else { 0 }, cfg.volume));
     }
 }
+
+// ── Custom media config (`media.cfg`) ────────────────────────────────────────
+// Line 1: gif_path   (custom 2D image/GIF; empty = use the built-in Miku gif)
+// Line 2: sound_path (custom looping sound; empty = use the built-in track)
+
+pub struct MediaConfig {
+    pub gif_path:   String,
+    pub sound_path: String,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        Self { gif_path: String::new(), sound_path: String::new() }
+    }
+}
+
+pub fn load_media_config() -> MediaConfig {
+    let path = match config_dir() { Some(d) => d.join("media.cfg"), None => return MediaConfig::default() };
+    let content = match fs::read_to_string(&path) { Ok(s) => s, Err(_) => return MediaConfig::default() };
+    let mut lines = content.lines();
+    MediaConfig {
+        gif_path:   lines.next().unwrap_or("").to_string(),
+        sound_path: lines.next().unwrap_or("").to_string(),
+    }
+}
+
+pub fn save_media_config(cfg: &MediaConfig) {
+    if let Some(dir) = config_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join("media.cfg"), format!("{}\n{}", cfg.gif_path, cfg.sound_path));
+    }
+}

@@ -7,9 +7,9 @@ use eframe::egui;
 
 use crate::audio::AudioPlayer;
 use crate::config::{
-    load_audio_config, load_project_config, load_project_path, load_upload_config,
-    save_audio_config, save_project_config, save_project_path, save_upload_config,
-    AudioConfig, UploadConfig,
+    load_audio_config, load_media_config, load_project_config, load_project_path, load_upload_config,
+    save_audio_config, save_media_config, save_project_config, save_project_path, save_upload_config,
+    AudioConfig, MediaConfig, UploadConfig,
 };
 use crate::engine::{build_init_status, detect_unreal_engine};
 use crate::gif::GifPlayer;
@@ -86,6 +86,11 @@ pub struct DevToolApp {
     // Self-update
     pub update_info:        Arc<Mutex<Option<UpdateInfo>>>,
     pub show_update_banner: bool,
+
+    // Custom media (2D image/GIF + looping sound)
+    pub show_media_config: bool,
+    pub custom_gif_path:   Option<PathBuf>,
+    pub custom_sound_path: Option<PathBuf>,
 }
 
 impl DevToolApp {
@@ -97,17 +102,26 @@ impl DevToolApp {
         let project_path_input = project_path.as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let gif_player  = GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif"));
+        let media_cfg = load_media_config();
+        let custom_gif_path = (!media_cfg.gif_path.is_empty())
+            .then(|| PathBuf::from(&media_cfg.gif_path))
+            .filter(|p| p.exists());
+        let custom_sound_path = (!media_cfg.sound_path.is_empty())
+            .then(|| PathBuf::from(&media_cfg.sound_path))
+            .filter(|p| p.exists());
+
+        let gif_player = custom_gif_path.as_ref()
+            .and_then(|p| GifPlayer::from_file(p))
+            .or_else(|| GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif")));
         let raw_window  = cc.window_handle().expect("no window handle").as_raw();
         let raw_display = cc.display_handle().expect("no display handle").as_raw();
         let webview_manager = WebViewManager::new(raw_window, raw_display);
         let upload_cfg  = load_upload_config();
         let audio_cfg   = load_audio_config();
-        let audio_player = AudioPlayer::new(
-            include_bytes!("../Sound/Ievan Polkka.mp3"),
-            audio_cfg.muted,
-            audio_cfg.volume,
-        );
+        let audio_bytes = custom_sound_path.as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+            .unwrap_or_else(|| include_bytes!("../Sound/Ievan Polkka.mp3").to_vec());
+        let audio_player = AudioPlayer::new(audio_bytes, audio_cfg.muted, audio_cfg.volume);
         let app = Self {
             engine_dir,
             project_path,
@@ -154,6 +168,9 @@ impl DevToolApp {
             pending_webview:  None,
             update_info:        Arc::new(Mutex::new(None)),
             show_update_banner: true,
+            show_media_config:  false,
+            custom_gif_path,
+            custom_sound_path,
         };
         ops_update::cleanup_old_binary();
         app.check_for_updates();
@@ -229,6 +246,74 @@ impl DevToolApp {
         self.audio_volume = volume;
         if let Some(a) = &mut self.audio_player { a.set_volume(volume); }
         save_audio_config(&AudioConfig { muted: self.audio_muted, volume: self.audio_volume });
+    }
+
+    // ── Custom media (2D image/GIF + looping sound) ───────────────────────────
+
+    pub fn open_media_config(&mut self) {
+        self.show_package_config = false;
+        self.show_vs_config      = false;
+        self.git_state            = GitState::Idle;
+        self.show_media_config   = true;
+    }
+
+    fn current_media_config(&self) -> MediaConfig {
+        MediaConfig {
+            gif_path:   self.custom_gif_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            sound_path: self.custom_sound_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        }
+    }
+
+    pub fn choose_custom_gif(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image / GIF", &["gif", "png", "jpg", "jpeg", "bmp", "webp"])
+            .set_title("Select a 2D image or GIF")
+            .pick_file()
+        else { return };
+
+        match GifPlayer::from_file(&path) {
+            Some(player) => {
+                self.gif_player = Some(player);
+                self.custom_gif_path = Some(path);
+                save_media_config(&self.current_media_config());
+                self.set_status("[OK] Custom image/GIF loaded.".into());
+            }
+            None => self.set_status("[ERROR] Could not load that image/GIF.".into()),
+        }
+    }
+
+    pub fn reset_gif_to_default(&mut self) {
+        self.gif_player = GifPlayer::from_bytes(include_bytes!("../Image/miku-hatsune.gif"));
+        self.custom_gif_path = None;
+        save_media_config(&self.current_media_config());
+        self.set_status("[OK] Restored default Miku GIF.".into());
+    }
+
+    pub fn choose_custom_sound(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Audio", &["mp3", "wav"])
+            .set_title("Select a looping sound")
+            .pick_file()
+        else { return };
+
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                if let Some(a) = &mut self.audio_player { a.set_source(bytes); }
+                self.custom_sound_path = Some(path);
+                save_media_config(&self.current_media_config());
+                self.set_status("[OK] Custom sound loaded.".into());
+            }
+            Err(e) => self.set_status(format!("[ERROR] Could not read sound file: {e}")),
+        }
+    }
+
+    pub fn reset_sound_to_default(&mut self) {
+        if let Some(a) = &mut self.audio_player {
+            a.set_source(include_bytes!("../Sound/Ievan Polkka.mp3").to_vec());
+        }
+        self.custom_sound_path = None;
+        save_media_config(&self.current_media_config());
+        self.set_status("[OK] Restored default sound.".into());
     }
 
     // ── Package actions ───────────────────────────────────────────────────────

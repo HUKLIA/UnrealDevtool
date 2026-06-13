@@ -1,18 +1,18 @@
 use rodio::{Decoder, DeviceSinkBuilder, Float, MixerDeviceSink, Player};
 use std::io::Cursor;
 
-/// Loops an embedded MP3 in the background, with adjustable mute/volume.
+/// Loops a (possibly user-supplied) audio track in the background, with adjustable mute/volume.
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
     player:  Player,
-    bytes:   &'static [u8],
+    bytes:   Vec<u8>,
     playing: bool,
     pub muted:  bool,
     pub volume: u32, // 0..=100
 }
 
 impl AudioPlayer {
-    pub fn new(bytes: &'static [u8], muted: bool, volume: u32) -> Option<Self> {
+    pub fn new(bytes: Vec<u8>, muted: bool, volume: u32) -> Option<Self> {
         let stream = DeviceSinkBuilder::open_default_sink().ok()?;
         let player = Player::connect_new(stream.mixer());
         let volume = volume.min(100);
@@ -26,7 +26,7 @@ impl AudioPlayer {
 
     pub fn play_looping(&mut self) {
         self.player.stop();
-        if let Ok(source) = Decoder::new_looped(Cursor::new(self.bytes)) {
+        if let Ok(source) = Decoder::new_looped(Cursor::new(self.bytes.clone())) {
             self.player.append(source);
             self.playing = true;
         }
@@ -37,6 +37,13 @@ impl AudioPlayer {
             self.player.stop();
             self.playing = false;
         }
+    }
+
+    /// Swap in a different track (e.g. a user-picked MP3/WAV), stopping any
+    /// playback in progress. Takes effect the next time `play_looping` runs.
+    pub fn set_source(&mut self, bytes: Vec<u8>) {
+        self.stop();
+        self.bytes = bytes;
     }
 
     pub fn is_playing(&self) -> bool {

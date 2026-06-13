@@ -239,6 +239,8 @@ impl DevToolApp {
             }
         } else if self.show_dm_spencer_panel {
             self.show_dm_spencer_panel(ui);
+        } else if self.show_media_config {
+            self.show_media_config_panel(ui);
         } else {
             self.show_action_buttons(ui);
         }
@@ -312,6 +314,101 @@ impl DevToolApp {
         if ui.add_sized(w, egui::Button::new("💬  DM Spencer")).clicked() {
             self.show_dm_spencer_panel = true;
         }
+        ui.add_space(8.0);
+        if ui.add_sized(w, egui::Button::new("🎨  Customize Miku & Sound")).clicked() {
+            self.open_media_config();
+        }
+    }
+
+    pub fn show_media_config_panel(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::none()
+            .fill(PANEL_DARK)
+            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("🎨  Customize Miku & Sound").size(13.0).color(MIKU_TEAL));
+                ui.add_space(10.0);
+
+                ui.label(egui::RichText::new("2D Image / GIF").size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                let ctx = ui.ctx().clone();
+                ui.horizontal(|ui| {
+                    let thumb_max = 96.0;
+                    egui::Frame::none()
+                        .fill(GIF_BG)
+                        .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+                        .rounding(egui::Rounding::same(6.0))
+                        .inner_margin(egui::Margin::same(4.0))
+                        .show(ui, |ui| {
+                            if let Some(gif) = &mut self.gif_player {
+                                gif.ensure_texture(&ctx);
+                                let size  = gif.size();
+                                let scale = (thumb_max / size.x.max(size.y).max(1.0)).min(1.0);
+                                gif.show(ui, size * scale);
+                            } else {
+                                ui.allocate_exact_size(egui::vec2(thumb_max, thumb_max), egui::Sense::hover());
+                            }
+                        });
+
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        let gif_label = self.custom_gif_path.as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "(default Miku GIF)".to_string());
+                        ui.label(egui::RichText::new(gif_label).size(10.0).color(HINT_GRAY).monospace());
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.add_sized([100.0, 24.0], egui::Button::new("Browse…")).clicked() {
+                                self.choose_custom_gif();
+                            }
+                            ui.add_enabled_ui(self.custom_gif_path.is_some(), |ui| {
+                                if ui.add_sized([80.0, 24.0], egui::Button::new("Reset")).clicked() {
+                                    self.reset_gif_to_default();
+                                }
+                            });
+                        });
+                    });
+                });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.label(egui::RichText::new("Looping Sound  (mp3 / wav)").size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                let (sound_name, sound_path_hint) = match &self.custom_sound_path {
+                    Some(p) => (
+                        p.file_name().map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.to_string_lossy().to_string()),
+                        Some(p.to_string_lossy().to_string()),
+                    ),
+                    None => ("Ievan Polkka  (default)".to_string(), None),
+                };
+                ui.horizontal(|ui| {
+                    ui.colored_label(MIKU_TEAL, "🔊");
+                    ui.label(egui::RichText::new(sound_name).size(13.0).color(egui::Color32::WHITE).strong());
+                });
+                if let Some(hint) = sound_path_hint {
+                    ui.label(egui::RichText::new(hint).size(10.0).color(HINT_GRAY).monospace());
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.add_sized([100.0, 24.0], egui::Button::new("Browse…")).clicked() {
+                        self.choose_custom_sound();
+                    }
+                    ui.add_enabled_ui(self.custom_sound_path.is_some(), |ui| {
+                        if ui.add_sized([80.0, 24.0], egui::Button::new("Reset")).clicked() {
+                            self.reset_sound_to_default();
+                        }
+                    });
+                });
+
+                ui.add_space(14.0);
+                if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
+                    self.show_media_config = false;
+                }
+            });
     }
 
     /// Renders an embedded web page (Cookie Clicker, Sponder Bird, 3D Miku)
