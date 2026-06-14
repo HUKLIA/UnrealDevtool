@@ -54,6 +54,27 @@ impl HasDisplayHandle for ParentWindow {
     }
 }
 
+/// Suppresses blocking JS dialogs. Some embedded pages (e.g. Unity WebGL's
+/// error handler) call `alert()` on uncaught errors such as the Pointer Lock
+/// cooldown SecurityError. A blocking native alert inside a child webview is
+/// bad UX, so silence `alert`/`confirm`/`prompt` and let the page keep running.
+const SUPPRESS_DIALOGS_SCRIPT: &str = "\
+    window.alert = function(){}; \
+    window.confirm = function(){ return true; }; \
+    window.prompt = function(){ return null; };";
+
+/// The 3D Miku page is a WebGL build with a fixed-size canvas and uses the
+/// Pointer Lock API for mouse-look. Stretch the canvas/page to fill our
+/// embedded view (so it fits the panel instead of showing scrollbars), and
+/// disable Pointer Lock so WebView2's "To show your cursor, press Esc"
+/// overlay never appears.
+const MIKU3D_FIT_SCRIPT: &str = "\
+    if (Element.prototype.requestPointerLock) { Element.prototype.requestPointerLock = function(){}; } \
+    document.exitPointerLock = function(){}; \
+    var __mikuStyle = document.createElement('style'); \
+    __mikuStyle.textContent = 'html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:100%!important;height:100%!important;}canvas{width:100%!important;height:100%!important;display:block!important;}'; \
+    document.documentElement.appendChild(__mikuStyle);";
+
 /// A created (or failed) webview plus the bounds/visibility we last applied
 /// to it, so `update` can skip redundant `set_bounds`/`set_visible` calls.
 /// Calling these every frame causes WebView2 to repeatedly drop focus, which
@@ -101,24 +122,21 @@ impl WebViewManager {
         let (panel, rect) = wanted?;
         let bounds = to_physical_bounds(rect, pixels_per_point);
 
-        let entry = self.views.entry(panel).or_insert_with(|| ViewEntry {
-            // Some embedded pages (e.g. Unity WebGL's error handler) call
-            // `alert()` on uncaught errors such as the Pointer Lock cooldown
-            // SecurityError. A blocking native alert inside a child webview
-            // is bad UX, so silence `alert`/`confirm`/`prompt` and let the
-            // page keep running.
-            view: WebViewBuilder::new_as_child(&self.parent)
-                .with_url(panel.url())
-                .with_bounds(make_rect(bounds))
-                .with_initialization_script(
-                    "window.alert = function(){}; \
-                     window.confirm = function(){ return true; }; \
-                     window.prompt = function(){ return null; };",
-                )
-                .build()
-                .map_err(|e| e.to_string()),
-            bounds,
-            visible: true,
+        let entry = self.views.entry(panel).or_insert_with(|| {
+            let init_script = match panel {
+                WebPanel::Miku3D => format!("{SUPPRESS_DIALOGS_SCRIPT}{MIKU3D_FIT_SCRIPT}"),
+                _ => SUPPRESS_DIALOGS_SCRIPT.to_string(),
+            };
+            ViewEntry {
+                view: WebViewBuilder::new_as_child(&self.parent)
+                    .with_url(panel.url())
+                    .with_bounds(make_rect(bounds))
+                    .with_initialization_script(&init_script)
+                    .build()
+                    .map_err(|e| e.to_string()),
+                bounds,
+                visible: true,
+            }
         });
 
         match &entry.view {
