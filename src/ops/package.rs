@@ -9,6 +9,7 @@ pub fn package_game(
     engine:      PathBuf,
     pack_name:   String,
     exe_name:    String,
+    version_str: String,
     status:      Arc<Mutex<String>>,
     pending_zip: Arc<Mutex<Option<PathBuf>>>,
     cancel:      Arc<AtomicBool>,
@@ -25,8 +26,6 @@ pub fn package_game(
         None    => return "[ERROR] Bad project path.".into(),
     };
     let build_dir   = project_dir.join("build");
-    let version_num = find_next_version(&build_dir);
-    let version_str = format_version(version_num);
     let version_dir = build_dir.join(&version_str);
     let log_path    = version_dir.join("BuildLog.txt");
 
@@ -72,8 +71,16 @@ pub fn package_game(
     prog!(0.08); // UAT creep starts here
     let uat_exit = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = uat_child.kill();
+            // `cmd /c RunUAT.bat` spawns AutomationTool, which in turn spawns
+            // UnrealBuildTool and UnrealEditor-Cmd as separate child
+            // processes. Killing just the cmd.exe (uat_child) leaves those
+            // running — UnrealEditor-Cmd then keeps the project locked, so
+            // the *next* build fails. Kill the whole process tree instead,
+            // and make sure no Unreal Editor process is left holding the
+            // project open.
+            kill_process_tree(uat_child.id());
             let _ = uat_child.wait();
+            close_editor_if_running(&status);
             return format!("[CANCELLED] UAT was cancelled.\nPartial log → {}", log_path.display());
         }
         match uat_child.try_wait() {
@@ -151,7 +158,7 @@ pub fn package_game(
     };
     let zip_exit = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = zip_child.kill();
+            kill_process_tree(zip_child.id());
             let _ = zip_child.wait();
             return "[CANCELLED] Zip was cancelled.".to_string();
         }
@@ -348,7 +355,7 @@ pub fn upload_via_rclone(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            kill_process_tree(child.id());
             let _ = child.wait();
             return "[CANCELLED] rclone upload cancelled.".to_string();
         }
@@ -401,6 +408,15 @@ fn close_editor_if_running(status: &Arc<Mutex<String>>) {
             std::thread::sleep(Duration::from_secs(2));
         }
     }
+}
+
+/// Kills `pid` and its entire descendant process tree (e.g. `cmd.exe` ->
+/// AutomationTool -> UnrealBuildTool / UnrealEditor-Cmd). Plain `Child::kill`
+/// only kills the immediate process and leaves such descendants running.
+fn kill_process_tree(pid: u32) {
+    let _ = crate::ops::cmd("taskkill")
+        .args(["/f", "/t", "/pid", &pid.to_string()])
+        .output();
 }
 
 fn is_process_running(exe_name: &str) -> bool {

@@ -43,6 +43,8 @@ pub struct DevToolApp {
     pub pack_name_input:      String,
     pub exe_name_input:       String,
     pub next_version_preview: u32,
+    pub use_custom_version:   bool,
+    pub version_override:     String,
 
     // VS-rebuild pre-flight
     pub show_vs_config: bool,
@@ -141,6 +143,8 @@ impl DevToolApp {
             pack_name_input:      String::new(),
             exe_name_input:       String::new(),
             next_version_preview: 1,
+            use_custom_version:   false,
+            version_override:     String::new(),
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
             pending_zip:        Arc::new(Mutex::new(None)),
@@ -327,6 +331,10 @@ impl DevToolApp {
             .map(|p| p.join("build"))
             .unwrap_or_default();
         self.next_version_preview = ops_package::find_next_version(&build_dir);
+        // Default the editable version field to the next auto-incremented
+        // version; the user can tick "Custom" to keep/change it.
+        self.version_override   = ops_package::format_version(self.next_version_preview);
+        self.use_custom_version  = false;
         self.show_package_config = true;
         self.show_vs_config      = false;
         self.git_state           = GitState::Idle;
@@ -348,6 +356,15 @@ impl DevToolApp {
             self.set_status("[ERROR] Names cannot be empty.".into());
             return;
         }
+        let version_str = if self.use_custom_version {
+            self.version_override.trim().to_string()
+        } else {
+            ops_package::format_version(self.next_version_preview)
+        };
+        if version_str.is_empty() || version_str.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
+            self.set_status("[ERROR] Invalid version — cannot be empty or contain \\ / : * ? \" < > |".into());
+            return;
+        }
         save_project_config(&project_path, &pack_name, &exe_name);
         self.show_package_config = false;
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
@@ -358,7 +375,7 @@ impl DevToolApp {
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, status_clone, pending_clone, cancel, progress)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress)
         });
     }
 

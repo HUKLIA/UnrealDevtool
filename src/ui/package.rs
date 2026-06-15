@@ -178,7 +178,14 @@ impl DevToolApp {
 
     pub fn show_package_config_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut do_start = false;
-        let version_label = crate::ops::package::format_version(self.next_version_preview);
+        let auto_version_label = crate::ops::package::format_version(self.next_version_preview);
+        let version_label = if self.use_custom_version {
+            self.version_override.trim().to_string()
+        } else {
+            auto_version_label.clone()
+        };
+        let version_valid = !version_label.is_empty()
+            && !version_label.chars().any(|c| "\\/:*?\"<>|".contains(c));
         let pack_preview  = format!(
             "-> build/{}/{}/   and   {}_{}.zip",
             version_label,
@@ -188,7 +195,8 @@ impl DevToolApp {
         );
         let exe_preview = format!("-> {}.exe", self.exe_name_input.trim());
         let can_start   = !self.pack_name_input.trim().is_empty()
-                       && !self.exe_name_input.trim().is_empty();
+                       && !self.exe_name_input.trim().is_empty()
+                       && version_valid;
 
         egui::Frame::none()
             .fill(PANEL_DARK)
@@ -211,9 +219,26 @@ impl DevToolApp {
 
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Version:").size(11.0).color(egui::Color32::GRAY));
-                    ui.colored_label(MIKU_TEAL, &version_label);
-                    ui.label(egui::RichText::new("(auto-incremented)").size(10.0).color(HINT_GRAY));
+                    if self.use_custom_version {
+                        ui.add(egui::TextEdit::singleline(&mut self.version_override).desired_width(80.0));
+                    } else {
+                        ui.colored_label(MIKU_TEAL, &auto_version_label);
+                        ui.label(egui::RichText::new("(auto-incremented)").size(10.0).color(HINT_GRAY));
+                    }
+                    if ui.checkbox(&mut self.use_custom_version, "Custom").changed()
+                        && self.use_custom_version
+                        && self.version_override.trim().is_empty()
+                    {
+                        self.version_override = auto_version_label.clone();
+                    }
                 });
+                if self.use_custom_version && !version_valid {
+                    ui.label(
+                        egui::RichText::new("Version cannot be empty or contain \\ / : * ? \" < > |")
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(220, 100, 100)),
+                    );
+                }
                 ui.add_space(12.0);
 
                 ui.horizontal(|ui| {
