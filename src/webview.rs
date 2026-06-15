@@ -63,17 +63,53 @@ const SUPPRESS_DIALOGS_SCRIPT: &str = "\
     window.confirm = function(){ return true; }; \
     window.prompt = function(){ return null; };";
 
-/// The 3D Miku page is a WebGL build with a fixed-size canvas and uses the
-/// Pointer Lock API for mouse-look. Stretch the canvas/page to fill our
-/// embedded view (so it fits the panel instead of showing scrollbars), and
-/// disable Pointer Lock so WebView2's "To show your cursor, press Esc"
-/// overlay never appears.
-const MIKU3D_FIT_SCRIPT: &str = "\
-    if (Element.prototype.requestPointerLock) { Element.prototype.requestPointerLock = function(){}; } \
-    document.exitPointerLock = function(){}; \
-    var __mikuStyle = document.createElement('style'); \
-    __mikuStyle.textContent = 'html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:100%!important;height:100%!important;}canvas{width:100%!important;height:100%!important;display:block!important;}'; \
-    document.documentElement.appendChild(__mikuStyle);";
+/// The 3D Miku page is a Unity WebGL build whose `#unity-container`/`canvas`
+/// have a fixed pixel size (so it shows up tiny with scrollbars in our
+/// embedded panel). This stretches the container and canvas to fill the
+/// embedded view, resizes the canvas's backing resolution to match (so it
+/// isn't blurry), and re-runs whenever the panel is resized. It also makes
+/// the canvas focusable and focuses it on click, so the Pointer Lock API
+/// (mouse-look) has a real user gesture + focused element to work with.
+const MIKU3D_FIT_SCRIPT: &str = r#"
+(function() {
+  if (window.__mikuFitInstalled) return;
+  window.__mikuFitInstalled = true;
+
+  var style = document.createElement('style');
+  style.textContent =
+    'html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:100%!important;height:100%!important;}' +
+    '#unity-container,.unity-desktop,.unity-mobile,#gameContainer,#game{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;transform:none!important;}' +
+    'canvas{width:100%!important;height:100%!important;display:block!important;outline:none!important;}';
+  document.documentElement.appendChild(style);
+
+  function fitCanvas() {
+    var canvas = document.querySelector('canvas');
+    if (!canvas) return false;
+    var rect = canvas.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.round(rect.width * dpr);
+    var h = Math.round(rect.height * dpr);
+    if (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2) {
+      canvas.width = w;
+      canvas.height = h;
+      window.dispatchEvent(new Event('resize'));
+    }
+    if (!canvas.__mikuClickBound) {
+      canvas.__mikuClickBound = true;
+      if (canvas.tabIndex < 0) canvas.tabIndex = 0;
+      canvas.addEventListener('mousedown', function() { canvas.focus(); });
+    }
+    return true;
+  }
+
+  var tries = 0;
+  var iv = setInterval(function() {
+    if (fitCanvas() || ++tries > 40) clearInterval(iv);
+  }, 250);
+  window.addEventListener('resize', fitCanvas);
+})();
+"#;
 
 /// A created (or failed) webview plus the bounds/visibility we last applied
 /// to it, so `update` can skip redundant `set_bounds`/`set_visible` calls.
@@ -135,7 +171,9 @@ impl WebViewManager {
                     .build()
                     .map_err(|e| e.to_string()),
                 bounds,
-                visible: true,
+                // Start as "not yet shown" so the first `update()` call below
+                // applies `set_visible(true)` + `focus()` exactly once.
+                visible: false,
             }
         });
 
@@ -147,6 +185,12 @@ impl WebViewManager {
                 }
                 if !entry.visible {
                     let _ = v.set_visible(true);
+                    // Give the embedded WebView2 control real OS keyboard
+                    // focus so clicking inside it (e.g. for Pointer Lock /
+                    // mouse-look in 3D Miku) works immediately. Only done on
+                    // activation, not every frame — repeated MoveFocus calls
+                    // would otherwise repeatedly blur the page.
+                    let _ = v.focus();
                     entry.visible = true;
                 }
                 None
