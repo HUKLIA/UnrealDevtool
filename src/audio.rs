@@ -26,9 +26,19 @@ impl AudioPlayer {
 
     pub fn play_looping(&mut self) {
         self.player.stop();
-        if let Ok(source) = Decoder::new_looped(Cursor::new(self.bytes.clone())) {
+        if let Ok(source) = Decoder::new(Cursor::new(self.bytes.clone())) {
             self.player.append(source);
             self.playing = true;
+        }
+    }
+
+    /// Call once per frame. Restarts the track when it ends so looping works
+    /// regardless of whether the decoder supports internal seeking.
+    /// (`Decoder::new_looped` silently stops after one play for symphonia MP3s
+    /// because re-probing from a sought `MediaSourceStream` fails.)
+    pub fn tick(&mut self) {
+        if self.playing && self.player.empty() {
+            self.play_looping();
         }
     }
 

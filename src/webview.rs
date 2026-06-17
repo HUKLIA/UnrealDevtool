@@ -4,8 +4,9 @@ use raw_window_handle::{
     RawWindowHandle, WindowHandle,
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 use wry::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
-use wry::{Rect, WebView, WebViewBuilder};
+use wry::{Rect, WebContext, WebView, WebViewBuilder};
 
 /// Web pages that can be embedded as a child WebView2 control inside the app window.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,14 +127,23 @@ struct ViewEntry {
 /// and shows/hides/repositions them to follow an egui placeholder rect.
 /// Only one panel is visible at a time.
 pub struct WebViewManager {
-    parent: ParentWindow,
-    views:  HashMap<WebPanel, ViewEntry>,
-    active: Option<WebPanel>,
+    parent:      ParentWindow,
+    views:       HashMap<WebPanel, ViewEntry>,
+    active:      Option<WebPanel>,
+    web_context: WebContext,
+}
+
+fn webview_data_dir() -> Option<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(PathBuf::from(appdata).join("UnrealDevtool").join("webview2"))
 }
 
 impl WebViewManager {
     pub fn new(window: RawWindowHandle, display: RawDisplayHandle) -> Self {
-        Self { parent: ParentWindow { window, display }, views: HashMap::new(), active: None }
+        // Persistent data dir so localStorage / cookies survive app restarts.
+        // Cookie Clicker saves its game here instead of starting fresh each time.
+        let web_context = WebContext::new(webview_data_dir());
+        Self { parent: ParentWindow { window, display }, views: HashMap::new(), active: None, web_context }
     }
 
     /// Call once per frame. `wanted` is the panel that should be visible right
@@ -158,24 +168,25 @@ impl WebViewManager {
         let (panel, rect) = wanted?;
         let bounds = to_physical_bounds(rect, pixels_per_point);
 
-        let entry = self.views.entry(panel).or_insert_with(|| {
+        // Lazily create the webview the first time this panel is requested.
+        // Use an explicit `contains_key` + `insert` rather than `or_insert_with`
+        // so we can mutably borrow `self.web_context` without conflicting with
+        // the mutable borrow of `self.views`.
+        if !self.views.contains_key(&panel) {
             let init_script = match panel {
                 WebPanel::Miku3D => format!("{SUPPRESS_DIALOGS_SCRIPT}{MIKU3D_FIT_SCRIPT}"),
                 _ => SUPPRESS_DIALOGS_SCRIPT.to_string(),
             };
-            ViewEntry {
-                view: WebViewBuilder::new_as_child(&self.parent)
-                    .with_url(panel.url())
-                    .with_bounds(make_rect(bounds))
-                    .with_initialization_script(&init_script)
-                    .build()
-                    .map_err(|e| e.to_string()),
-                bounds,
-                // Start as "not yet shown" so the first `update()` call below
-                // applies `set_visible(true)` + `focus()` exactly once.
-                visible: false,
-            }
-        });
+            let view = WebViewBuilder::new_as_child(&self.parent)
+                .with_url(panel.url())
+                .with_bounds(make_rect(bounds))
+                .with_initialization_script(&init_script)
+                .with_web_context(&mut self.web_context)
+                .build()
+                .map_err(|e| e.to_string());
+            self.views.insert(panel, ViewEntry { view, bounds, visible: false });
+        }
+        let entry = self.views.get_mut(&panel).unwrap();
 
         match &entry.view {
             Ok(v) => {

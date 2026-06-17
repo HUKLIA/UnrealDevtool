@@ -56,6 +56,8 @@ impl eframe::App for DevToolApp {
 
         }
 
+        if let Some(a) = &mut self.audio_player { a.tick(); }
+
         self.pending_webview = None;
 
         egui::CentralPanel::default().show(ctx, |ui| {
