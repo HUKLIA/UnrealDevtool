@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Instant;
 
 use eframe::egui;
 
@@ -88,6 +89,7 @@ pub struct DevToolApp {
     // Self-update
     pub update_info:        Arc<Mutex<Option<UpdateInfo>>>,
     pub show_update_banner: bool,
+    pub last_update_check:  Instant,
 
     // Custom media (2D image/GIF + looping sound)
     pub show_media_config: bool,
@@ -98,8 +100,8 @@ pub struct DevToolApp {
 impl DevToolApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_miku_theme(&cc.egui_ctx);
-        let engine_dir   = detect_unreal_engine();
         let project_path = load_project_path();
+        let engine_dir   = detect_unreal_engine(project_path.as_deref());
         let init_status  = build_init_status(&engine_dir, &project_path);
         let project_path_input = project_path.as_ref()
             .map(|p| p.to_string_lossy().to_string())
@@ -124,7 +126,7 @@ impl DevToolApp {
             .and_then(|p| std::fs::read(p).ok())
             .unwrap_or_else(|| include_bytes!("../Sound/Ievan Polkka.mp3").to_vec());
         let audio_player = AudioPlayer::new(audio_bytes, audio_cfg.muted, audio_cfg.volume);
-        let app = Self {
+        let mut app = Self {
             engine_dir,
             project_path,
             project_path_input,
@@ -172,12 +174,13 @@ impl DevToolApp {
             pending_webview:  None,
             update_info:        Arc::new(Mutex::new(None)),
             show_update_banner: true,
+            last_update_check:  Instant::now(),
             show_media_config:  false,
             custom_gif_path,
             custom_sound_path,
         };
         ops_update::cleanup_old_binary();
-        app.check_for_updates();
+        app.check_for_updates(cc.egui_ctx.clone());
         app
     }
 
@@ -190,7 +193,7 @@ impl DevToolApp {
         if p.exists() && p.extension().map_or(false, |e| e.eq_ignore_ascii_case("uproject")) {
             save_project_path(&p);
             self.project_path = Some(p);
-            self.refresh_status();
+            self.redetect_engine();
         }
     }
 
@@ -202,6 +205,13 @@ impl DevToolApp {
         self.set_status(build_init_status(&self.engine_dir, &self.project_path));
     }
 
+    /// Re-runs engine detection against the current project and updates
+    /// `engine_dir`. Call whenever the project path changes.
+    pub fn redetect_engine(&mut self) {
+        self.engine_dir = detect_unreal_engine(self.project_path.as_deref());
+        self.refresh_status();
+    }
+
     pub fn git_project_dir(&self) -> Option<PathBuf> {
         self.project_path.as_ref()?.parent().map(|p| p.to_path_buf())
     }
@@ -209,13 +219,16 @@ impl DevToolApp {
     // ── Self-update ───────────────────────────────────────────────────────────
 
     /// Ask GitHub for the latest release in the background; updates `update_info`
-    /// (read by the UI) if a newer build is available.
-    pub fn check_for_updates(&self) {
+    /// (read by the UI) if a newer build is available, then requests a repaint
+    /// so the banner appears immediately without waiting for user input.
+    pub fn check_for_updates(&mut self, ctx: egui::Context) {
         let current_version = env!("CARGO_PKG_VERSION").to_string();
         let update_info = Arc::clone(&self.update_info);
+        self.last_update_check = Instant::now();
         thread::spawn(move || {
             if let Ok(Some(info)) = ops_update::check_for_update(&current_version) {
                 *update_info.lock().unwrap() = Some(info);
+                ctx.request_repaint();
             }
         });
     }

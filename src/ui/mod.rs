@@ -11,10 +11,26 @@ use std::sync::atomic::Ordering;
 
 // ── eframe::App — the main update loop ───────────────────────────────────────
 
+/// How often to re-check GitHub for a new release while the app is open.
+/// 5 minutes: notices a new build quickly without burning the 60 req/hr limit.
+const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let is_busy = *self.is_working.lock().unwrap();
         self.status_display = self.status_message.lock().unwrap().clone();
+
+        // Periodic update check. Once an update is found we stop polling.
+        // `request_repaint_after` lets egui sleep until the next check is due
+        // rather than painting every frame just to watch the clock.
+        if self.update_info.lock().unwrap().is_none() {
+            let elapsed = self.last_update_check.elapsed();
+            if elapsed >= UPDATE_CHECK_INTERVAL {
+                self.check_for_updates(ctx.clone());
+            } else {
+                ctx.request_repaint_after(UPDATE_CHECK_INTERVAL - elapsed);
+            }
+        }
 
         // Detect background-task completion and advance git state machine
         let just_finished = self.was_working && !is_busy;
@@ -507,7 +523,7 @@ impl DevToolApp {
                     save_project_path(&path);
                     self.project_path_input = path.to_string_lossy().to_string();
                     self.project_path       = Some(path);
-                    self.refresh_status();
+                    self.redetect_engine();
                 }
             }
 
