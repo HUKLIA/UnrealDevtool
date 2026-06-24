@@ -431,7 +431,7 @@ impl DevToolApp {
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        if let Some(a) = &mut self.audio_player { a.set_speed(5.0); a.play_looping(); }
+        if let Some(a) = &mut self.audio_player { a.set_speed(2.5); a.play_looping(); }
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
