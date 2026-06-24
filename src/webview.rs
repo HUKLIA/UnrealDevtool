@@ -135,7 +135,9 @@ pub struct WebViewManager {
 
 fn webview_data_dir() -> Option<PathBuf> {
     let appdata = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(appdata).join("UnrealDevtool").join("webview2"))
+    let dir = PathBuf::from(appdata).join("UnrealDevtool").join("webview2");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 impl WebViewManager {
