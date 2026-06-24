@@ -121,7 +121,7 @@ impl DevToolApp {
         }
         let dt = ctx.input(|i| i.stable_dt);
         if !self.miku_mode_3d {
-            let gif_dt = if self.fast_package_mode { dt * 2.0 } else { dt };
+            let gif_dt = if self.fast_package_mode { dt * 5.0 } else { dt };
             if let Some(gif) = &mut self.gif_player { gif.advance(ctx, gif_dt); }
         }
 
