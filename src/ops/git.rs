@@ -107,16 +107,18 @@ pub fn task_git_sync(
         return "[CANCELLED] Git operation was cancelled.".to_string();
     }}; }
 
+    let branch = git_current_branch(&dir);
+
     check!(); prog!(0.05);
-    upd!("[1/2] Fetching origin/main…");
+    upd!("[1/3] Fetching origin/main…");
     let (ok, out) = run_git(&dir, &["fetch", "origin", "main"]);
     if !ok {
         *result.lock().unwrap() = Some(GitTaskStatus::Error);
         return format!("[ERROR] fetch: {}", out);
     }
 
-    check!(); prog!(0.50);
-    upd!("[2/2] Rebasing onto origin/main…");
+    check!(); prog!(0.40);
+    upd!("[2/3] Rebasing onto origin/main…");
     let (ok, out) = run_git(&dir, &["rebase", "origin/main"]);
     if !ok {
         if is_conflict(&out) {
@@ -130,9 +132,23 @@ pub fn task_git_sync(
         return format!("[ERROR] rebase: {}", out);
     }
 
+    check!(); prog!(0.75);
+    upd!(format!("[3/3] Pushing {} to origin…", branch));
+    let branch_str = branch.as_str();
+    let is_main_branch = branch_str == "main" || branch_str == "master";
+    let (ok, out) = if is_main_branch {
+        run_git(&dir, &["push", "origin", branch_str])
+    } else {
+        run_git(&dir, &["push", "--force-with-lease", "origin", branch_str])
+    };
+    if !ok {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return format!("[ERROR] push: {}", out);
+    }
+
     prog!(1.0);
     *result.lock().unwrap() = Some(GitTaskStatus::Ok);
-    format!("[DONE] Synced with origin/main via rebase.\n{}", out.trim())
+    format!("[DONE] Synced with main and pushed {} to origin.", branch)
 }
 
 pub fn task_git_merge_to_main(
