@@ -392,6 +392,28 @@ impl DevToolApp {
         });
     }
 
+    pub fn start_fast_packaging(&mut self) {
+        let version_str = if self.use_custom_version {
+            self.version_override.trim().to_string()
+        } else {
+            ops_package::format_version(self.next_version_preview)
+        };
+        if version_str.is_empty() || version_str.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
+            self.set_status("[ERROR] Invalid version.".into());
+            return;
+        }
+        self.show_package_config = false;
+        self.busy_label = "[ FAST PACKAGING ]".into();
+        if let Some(g) = &mut self.gif_player { g.reset(); }
+        if let Some(a) = &mut self.audio_player { a.play_looping(); }
+        let cancel   = Arc::clone(&self.cancel_flag);
+        let status   = Arc::clone(&self.status_message);
+        let progress = Arc::clone(&self.progress);
+        self.run_background_task("Starting fast package…", move || {
+            ops_package::package_game_fast(version_str, status, cancel, progress)
+        });
+    }
+
     pub fn start_upload(&mut self) {
         let zip = self.upload_zip_path.clone();
         if !zip.exists() {
