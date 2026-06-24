@@ -462,6 +462,37 @@ pub fn format_version(n: u32) -> String {
     format!("v0.{}.{}", n / 100, n % 100)
 }
 
+/// Fake fast-package: animates progress quickly without running UAT.
+pub fn package_game_fast(
+    version_str: String,
+    status:      Arc<Mutex<String>>,
+    cancel:      Arc<AtomicBool>,
+    progress:    Arc<Mutex<f32>>,
+) -> String {
+    macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
+    macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
+    macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
+        return "[CANCELLED] Fast packaging was cancelled.".to_string();
+    }}; }
+
+    let steps: &[(f32, &str)] = &[
+        (0.10, "[1/6] Initialising build environment…"),
+        (0.25, "[2/6] Compiling shaders…"),
+        (0.45, "[3/6] Cooking content…"),
+        (0.65, "[4/6] Staging files…"),
+        (0.82, "[5/6] Packing assets…"),
+        (0.95, "[6/6] Creating archive…"),
+    ];
+    for (p, msg) in steps {
+        check!();
+        prog!(*p);
+        upd!(*msg);
+        std::thread::sleep(Duration::from_millis(700));
+    }
+    prog!(1.0);
+    format!("[DONE] {} — fast packaged! (demo mode)", version_str)
+}
+
 pub fn find_main_exe(dir: &Path) -> Option<PathBuf> {
     const SKIP: &[&str] = &["CrashReportClient", "UEPrereqSetup_x64", "UEPrereqSetup_x86"];
     fs::read_dir(dir).ok()?
