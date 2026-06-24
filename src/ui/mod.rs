@@ -192,9 +192,27 @@ impl DevToolApp {
             ui.label(egui::RichText::new(&self.busy_label).size(15.0).color(MIKU_TEAL));
             ui.add_space(6.0);
 
-            let prog = *self.progress.lock().unwrap();
+            let real_prog = *self.progress.lock().unwrap();
+            // Fast-package mode: animate the bar to ~0.95 in ~6s visually,
+            // then snap to 1.0 the moment the real pipeline finishes.
+            let display_prog = if self.fast_package_mode {
+                if real_prog >= 1.0 {
+                    1.0f32
+                } else {
+                    let elapsed = self.task_started_at
+                        .map(|t| t.elapsed().as_secs_f32())
+                        .unwrap_or(0.0);
+                    // Approaches 0.95 asymptotically; reaches ~0.93 at 6s.
+                    (1.0 - (-elapsed * 0.5_f32).exp()) * 0.95
+                }
+            } else {
+                real_prog
+            };
+            if self.fast_package_mode && real_prog < 1.0 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
             ui.add(
-                egui::ProgressBar::new(prog)
+                egui::ProgressBar::new(display_prog)
                     .desired_width(ui.available_width().min(340.0))
                     .fill(MIKU_TEAL)
                     .show_percentage(),

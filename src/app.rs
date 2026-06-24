@@ -91,6 +91,10 @@ pub struct DevToolApp {
     pub show_update_banner: bool,
     pub last_update_check:  Instant,
 
+    // Fast-package progress animation
+    pub fast_package_mode:  bool,
+    pub task_started_at:    Option<Instant>,
+
     // Custom media (2D image/GIF + looping sound)
     pub show_media_config: bool,
     pub custom_gif_path:   Option<PathBuf>,
@@ -175,6 +179,8 @@ impl DevToolApp {
             update_info:        Arc::new(Mutex::new(None)),
             show_update_banner: true,
             last_update_check:  Instant::now(),
+            fast_package_mode:  false,
+            task_started_at:    None,
             show_media_config:  false,
             custom_gif_path,
             custom_sound_path,
@@ -380,6 +386,8 @@ impl DevToolApp {
         }
         save_project_config(&project_path, &pack_name, &exe_name);
         self.show_package_config = false;
+        self.fast_package_mode  = false;
+        self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         if let Some(a) = &mut self.audio_player { a.play_looping(); }
@@ -393,24 +401,43 @@ impl DevToolApp {
     }
 
     pub fn start_fast_packaging(&mut self) {
+        let project_path = match self.project_path.clone() { Some(p) => p, None => return };
+        let engine_dir   = match self.engine_dir.clone() {
+            Some(e) => e,
+            None    => {
+                self.set_status("[ERROR] Engine not found.".into());
+                self.show_package_config = false;
+                return;
+            }
+        };
+        let pack_name = self.pack_name_input.trim().to_string();
+        let exe_name  = self.exe_name_input.trim().to_string();
+        if pack_name.is_empty() || exe_name.is_empty() {
+            self.set_status("[ERROR] Names cannot be empty.".into());
+            return;
+        }
         let version_str = if self.use_custom_version {
             self.version_override.trim().to_string()
         } else {
             ops_package::format_version(self.next_version_preview)
         };
         if version_str.is_empty() || version_str.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
-            self.set_status("[ERROR] Invalid version.".into());
+            self.set_status("[ERROR] Invalid version — cannot be empty or contain \\ / : * ? \" < > |".into());
             return;
         }
+        save_project_config(&project_path, &pack_name, &exe_name);
         self.show_package_config = false;
-        self.busy_label = "[ FAST PACKAGING ]".into();
+        self.fast_package_mode  = true;
+        self.task_started_at    = Some(Instant::now());
+        self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         if let Some(a) = &mut self.audio_player { a.play_looping(); }
-        let cancel   = Arc::clone(&self.cancel_flag);
-        let status   = Arc::clone(&self.status_message);
-        let progress = Arc::clone(&self.progress);
-        self.run_background_task("Starting fast package…", move || {
-            ops_package::package_game_fast(version_str, status, cancel, progress)
+        let status_clone  = Arc::clone(&self.status_message);
+        let pending_clone = Arc::clone(&self.pending_zip);
+        let cancel        = Arc::clone(&self.cancel_flag);
+        let progress      = Arc::clone(&self.progress);
+        self.run_background_task("Starting fast UAT pipeline…", move || {
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress)
         });
     }
 
