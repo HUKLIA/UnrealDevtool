@@ -1,4 +1,4 @@
-use rodio::{Decoder, DeviceSinkBuilder, Float, MixerDeviceSink, Player};
+use rodio::{Decoder, DeviceSinkBuilder, Float, MixerDeviceSink, Player, Source};
 use std::io::Cursor;
 
 /// Loops a (possibly user-supplied) audio track in the background, with adjustable mute/volume.
@@ -9,6 +9,7 @@ pub struct AudioPlayer {
     playing: bool,
     pub muted:  bool,
     pub volume: u32, // 0..=100
+    pub speed:  f32,
 }
 
 impl AudioPlayer {
@@ -17,7 +18,7 @@ impl AudioPlayer {
         let player = Player::connect_new(stream.mixer());
         let volume = volume.min(100);
         player.set_volume(Self::effective_volume(muted, volume));
-        Some(Self { _stream: stream, player, bytes, playing: false, muted, volume })
+        Some(Self { _stream: stream, player, bytes, playing: false, muted, volume, speed: 1.0 })
     }
 
     fn effective_volume(muted: bool, volume: u32) -> Float {
@@ -27,8 +28,15 @@ impl AudioPlayer {
     pub fn play_looping(&mut self) {
         self.player.stop();
         if let Ok(source) = Decoder::new(Cursor::new(self.bytes.clone())) {
-            self.player.append(source);
+            self.player.append(source.speed(self.speed));
             self.playing = true;
+        }
+    }
+
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed.max(0.1);
+        if self.playing {
+            self.play_looping();
         }
     }
 

@@ -36,7 +36,11 @@ impl eframe::App for DevToolApp {
         let just_finished = self.was_working && !is_busy;
         self.was_working = is_busy;
         if just_finished {
-            if let Some(a) = &mut self.audio_player { a.stop(); }
+            if let Some(a) = &mut self.audio_player {
+                a.set_speed(1.0);
+                a.stop();
+            }
+            self.fast_package_mode = false;
             let git_status = self.git_result.lock().unwrap().take();
             if let Some(gs) = git_status {
                 match gs {
@@ -117,7 +121,8 @@ impl DevToolApp {
         }
         let dt = ctx.input(|i| i.stable_dt);
         if !self.miku_mode_3d {
-            if let Some(gif) = &mut self.gif_player { gif.advance(ctx, dt); }
+            let gif_dt = if self.fast_package_mode { dt * 2.0 } else { dt };
+            if let Some(gif) = &mut self.gif_player { gif.advance(ctx, gif_dt); }
         }
 
         // ── 2D / 3D toggle ────────────────────────────────────────────────────
@@ -193,30 +198,59 @@ impl DevToolApp {
             ui.add_space(6.0);
 
             let real_prog = *self.progress.lock().unwrap();
-            // Fast-package mode: animate the bar to ~0.95 in ~6s visually,
-            // then snap to 1.0 the moment the real pipeline finishes.
-            let display_prog = if self.fast_package_mode {
-                if real_prog >= 1.0 {
-                    1.0f32
-                } else {
-                    let elapsed = self.task_started_at
-                        .map(|t| t.elapsed().as_secs_f32())
-                        .unwrap_or(0.0);
-                    // Approaches 0.95 asymptotically; reaches ~0.93 at 6s.
-                    (1.0 - (-elapsed * 0.5_f32).exp()) * 0.95
+
+            if self.fast_package_mode {
+                let done = real_prog >= 1.0;
+                let elapsed = self.task_started_at
+                    .map(|t| t.elapsed().as_secs_f32())
+                    .unwrap_or(0.0);
+
+                // Each step fills in 2.5s sequentially; overall rushes to ~0.95.
+                let step = |start: f32| -> f32 {
+                    if done { return 1.0; }
+                    ((elapsed - start) / 2.5).clamp(0.0, 1.0)
+                };
+                let overall = if done { 1.0 } else {
+                    (1.0 - (-elapsed * 0.6_f32).exp()) * 0.95
+                };
+
+                let bar_w = ui.available_width().min(340.0);
+                let steps: &[(&str, f32, egui::Color32)] = &[
+                    ("Compile ",  step(0.0),  MIKU_TEAL),
+                    ("Cook    ",  step(2.5),  MIKU_PINK),
+                    ("Stage   ",  step(5.0),  egui::Color32::from_rgb(180, 160, 60)),
+                    ("Pack    ",  step(7.5),  egui::Color32::from_rgb(80, 160, 220)),
+                ];
+                for (label, prog, color) in steps {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(*label).size(10.0).color(HINT_GRAY).monospace());
+                        ui.add(
+                            egui::ProgressBar::new(*prog)
+                                .desired_width(bar_w - 60.0)
+                                .fill(*color),
+                        );
+                    });
+                    ui.add_space(2.0);
+                }
+                ui.add_space(6.0);
+                ui.add(
+                    egui::ProgressBar::new(overall)
+                        .desired_width(bar_w)
+                        .fill(MIKU_TEAL)
+                        .show_percentage(),
+                );
+
+                if !done {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
                 }
             } else {
-                real_prog
-            };
-            if self.fast_package_mode && real_prog < 1.0 {
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                ui.add(
+                    egui::ProgressBar::new(real_prog)
+                        .desired_width(ui.available_width().min(340.0))
+                        .fill(MIKU_TEAL)
+                        .show_percentage(),
+                );
             }
-            ui.add(
-                egui::ProgressBar::new(display_prog)
-                    .desired_width(ui.available_width().min(340.0))
-                    .fill(MIKU_TEAL)
-                    .show_percentage(),
-            );
 
             ui.add_space(4.0);
             ui.label(egui::RichText::new("see Status / Output below for progress")
