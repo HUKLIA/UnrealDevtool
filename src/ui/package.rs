@@ -176,8 +176,9 @@ impl DevToolApp {
         action
     }
 
-    pub fn show_package_config_panel(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut do_start = false;
+    /// Returns `Some(false)` = start normal, `Some(true)` = start fast, `None` = no action.
+    pub fn show_package_config_panel(&mut self, ui: &mut egui::Ui) -> Option<bool> {
+        let mut action: Option<bool> = None;
         let auto_version_label = crate::ops::package::format_version(self.next_version_preview);
         let version_label = if self.use_custom_version {
             self.version_override.trim().to_string()
@@ -243,8 +244,11 @@ impl DevToolApp {
 
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(can_start, |ui| {
-                        if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Start Packaging")).clicked() {
-                            do_start = true;
+                        if ui.add_sized([150.0, 32.0], egui::Button::new(">>  Start Packaging")).clicked() {
+                            action = Some(false);
+                        }
+                        if ui.add_sized([110.0, 32.0], egui::Button::new("⚡  Fast Package")).clicked() {
+                            action = Some(true);
                         }
                     });
                     if ui.add_sized([90.0, 32.0], egui::Button::new("x  Cancel")).clicked() {
@@ -252,7 +256,7 @@ impl DevToolApp {
                     }
                 });
             });
-        do_start
+        action
     }
 
     pub fn show_open_folder_panel(&mut self, ui: &mut egui::Ui) {
