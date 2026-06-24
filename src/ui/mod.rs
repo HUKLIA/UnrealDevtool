@@ -237,8 +237,11 @@ impl DevToolApp {
             }
 
         } else if self.show_package_config {
-            let go = self.show_package_config_panel(ui);
-            if go { self.start_packaging(); }
+            match self.show_package_config_panel(ui) {
+                Some(false) => self.start_packaging(),
+                Some(true)  => self.start_fast_packaging(),
+                None        => {}
+            }
 
         } else if self.show_vs_config {
             let go = self.show_vs_config_panel(ui);
