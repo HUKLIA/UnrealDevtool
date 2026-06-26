@@ -1,6 +1,6 @@
 # Unreal DevTool
 
-A Windows desktop tool for Unreal Engine 5 developers: Packages builds, regenerates Visual Studio project files, and handles Git, all from one GUI.
+A Windows desktop tool for Unreal Engine 5 developers: packages builds, regenerates Visual Studio project files, manages Git, and includes a few extras — all from one GUI.
 
 > **Study & research project. Not for production.**
 > Feel free to use it for testing or as a reference for your own work.
@@ -13,9 +13,35 @@ A Windows desktop tool for Unreal Engine 5 developers: Packages builds, regenera
 |---|---|
 | **Rebuild VS Files** | Cleans generated folders, runs `GenerateProjectFiles.bat`, opens the result in Rider or Visual Studio |
 | **Package Game** | Runs UAT `BuildCookRun`, renames the output, zips it, and optionally uploads to Google Drive via rclone or copies to a local path |
-| **Git** | Commit & push, sync with main (fetch + rebase), or merge current branch into main |
-| **Cookie Clicker** | Opens [Cookie Clicker](https://orteil.dashnet.org/cookieclicker/) in the default browser |
-| **DM Spencer** | Step-by-step guide for DMing Spencer (`gonkindroid`) on Discord, with a shortcut to [Sponder Bird](https://nicktam1.github.io/SponderBirdNew/) |
+| **Fast Package** | Same real UAT pipeline as Package Game — progress bar animates at high speed with per-stage sub-bars, GIF plays at 2× speed, and audio plays at 2× speed for the full fast-build feel |
+| **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), or merge current branch into main |
+| **Cookie Clicker** | Embedded Cookie Clicker ([orteil.dashnet.org](https://orteil.dashnet.org/cookieclicker/)) inside the app window with persistent save data across sessions |
+| **3D Miku / 2D Miku** | Toggle between the animated 2D Miku GIF and an embedded 3D Unity WebGL viewer with full mouse-look (pointer lock) support |
+| **Sponder Bird** | Embedded [Sponder Bird](https://nicktam1.github.io/SponderBirdNew/) game inside the app window |
+| **DM on Discord** | Automatically opens Discord on this PC, restores it from minimised/tray, searches for any username via Ctrl+K, and presses Enter to jump straight into the chat. Username is editable in-app |
+
+---
+
+## Package versions
+
+Versions auto-increment as `v0.0.1`, `v0.0.2`, … based on existing build folders. You can also enter a custom version before packaging. The version string is validated — it cannot be empty or contain characters that are illegal in Windows file names (`\ / : * ? " < > |`).
+
+---
+
+## Sync with main
+
+"Sync with main" is fully automatic:
+1. `git fetch origin main`
+2. `git rebase origin/main`
+3. `git push --force-with-lease origin <current-branch>` (or a regular push if already on main/master)
+
+No manual pull or push needed after clicking the button.
+
+---
+
+## Auto update check
+
+The app checks GitHub for a newer release on startup and then every 5 minutes while running. If a new version is found, a banner appears immediately. No restart needed to see the update prompt.
 
 ---
 
@@ -56,13 +82,20 @@ rclone must be in your `PATH`. The remote name must match the prefix you used in
 
 ---
 
+## Requirements
+
+- Windows 10/11
+- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (pre-installed on Windows 11; free download for Windows 10) — required for Cookie Clicker, 3D Miku, and Sponder Bird embedded panels
+
+---
+
 ## Notes
 
 - Config and build names are saved to `%APPDATA%\UnrealDevTool\`
-- Builds version automatically: `v0.0.1`, `v0.0.2`, …
-- Google Drive uploads use rclone — no OAuth tokens stored by the app
-- Force push is intentionally not implemented
-- The exe is fully portable — no installer or runtime needed
+- WebView2 persistent data (Cookie Clicker save, etc.) stored in `%APPDATA%\UnrealDevTool\webview2\`
+- Engine detection reads `EngineAssociation` from the `.uproject` file to find the exact matching engine version
+- Force push to main is intentionally not implemented
+- The exe is fully portable — no installer or runtime needed (WebView2 aside)
 
 ---
 
