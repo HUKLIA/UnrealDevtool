@@ -524,8 +524,9 @@ impl DevToolApp {
                 ui.add_space(10.0);
 
                 let can_open = !self.dm_target_name.trim().is_empty();
+                let btn_w = ui.available_width();
                 ui.add_enabled_ui(can_open, |ui| {
-                    if ui.add_sized([f32::INFINITY, 34.0],
+                    if ui.add_sized([btn_w, 34.0],
                         egui::Button::new("🔍  Open Discord & Search")).clicked()
                     {
                         crate::ops::discord::open_discord_dm(&self.dm_target_name);
