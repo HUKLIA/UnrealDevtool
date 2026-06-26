@@ -504,49 +504,49 @@ impl DevToolApp {
 
     pub fn show_dm_spencer_panel(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("How to DM Spencer on Discord")
+            ui.label(egui::RichText::new("💬  DM on Discord")
                 .size(16.0).color(egui::Color32::WHITE).strong());
         });
         ui.add_space(12.0);
-
-        let steps: &[(&str, &str)] = &[
-            ("1", "Open Discord on your PC or phone."),
-            ("2", "Press  Ctrl + K  (PC) or tap the 🔍 Search icon (mobile)."),
-            ("3", "Type  gonkindroid  in the search box."),
-            ("4", "Click on  Gonk Droid  when it appears in the results."),
-            ("5", "Type your message in the chat box and press  Enter  to send."),
-        ];
 
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(30, 30, 40))
             .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
-                for (num, step) in steps {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(MIKU_TEAL,
-                            egui::RichText::new(format!("Step {}:", num)).strong());
-                        ui.label(egui::RichText::new(*step).color(egui::Color32::LIGHT_GRAY));
-                    });
-                    ui.add_space(6.0);
-                }
+                ui.label(egui::RichText::new("Discord username to search:")
+                    .size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                ui.add(egui::TextEdit::singleline(&mut self.dm_target_name)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("e.g. gonkindroid"));
+                ui.add_space(10.0);
+
+                let can_open = !self.dm_target_name.trim().is_empty();
+                ui.add_enabled_ui(can_open, |ui| {
+                    if ui.add_sized([f32::INFINITY, 34.0],
+                        egui::Button::new("🔍  Open Discord & Search")).clicked()
+                    {
+                        crate::ops::discord::open_discord_dm(&self.dm_target_name);
+                    }
+                });
             });
 
-        ui.add_space(10.0);
-        ui.colored_label(egui::Color32::GRAY,
-            "Note: gonkindroid must share a server with you, or have DMs open.");
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(
+            "Opens Discord on this PC, presses Ctrl+K and types the username automatically.")
+            .size(10.0).color(HINT_GRAY));
         ui.add_space(12.0);
-        ui.vertical_centered(|ui| {
-            ui.horizontal(|ui| {
-                if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                    self.show_dm_spencer_panel = false;
-                }
-                ui.add_space(8.0);
-                if ui.add_sized([160.0, 28.0], egui::Button::new("🐦  Play Sponder Bird")).clicked() {
-                    self.active_web_panel = Some(crate::webview::WebPanel::SponderBird);
-                }
-            });
+
+        ui.horizontal(|ui| {
+            if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
+                self.show_dm_spencer_panel = false;
+            }
+            ui.add_space(8.0);
+            if ui.add_sized([160.0, 28.0], egui::Button::new("🐦  Play Sponder Bird")).clicked() {
+                self.active_web_panel = Some(crate::webview::WebPanel::SponderBird);
+            }
         });
     }
 
