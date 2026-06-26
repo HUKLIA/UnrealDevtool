@@ -44,12 +44,12 @@ if (-not (Restore-Discord)) {
     // for AppActivate and SendKeys to reach the correct window.
     let vbs = format!(r#"Set wsh = CreateObject("WScript.Shell")
 
-' Step 1 – restore/focus Discord via Win32 (handles minimised, tray, not running)
+' Step 1 - restore/focus Discord via Win32 (handles minimised, tray, not running)
 wsh.Run "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{ps1}""", 0, True
 
 WScript.Sleep 400
 
-' Step 2 – make sure Discord is the foreground window (retry up to 10x)
+' Step 2 - make sure Discord is the foreground window (retry up to 10x)
 Dim i
 For i = 1 To 10
     If wsh.AppActivate("Discord") Then Exit For
@@ -58,7 +58,7 @@ Next
 
 WScript.Sleep 500
 
-' Step 3 – clear any open panel, open DM search, type name, Enter to open chat
+' Step 3 - clear any open panel, open DM search, type name, Enter to open chat
 wsh.SendKeys "{{ESC}}"
 WScript.Sleep 250
 wsh.SendKeys "^k"
