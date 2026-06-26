@@ -4,78 +4,70 @@ pub fn open_discord_dm(username: &str) {
     let escaped = escape_sendkeys(username.trim());
     if escaped.is_empty() { return; }
 
-    let tmp       = std::env::temp_dir();
-    let ps1_path  = tmp.join("devtool_discord_restore.ps1");
-    let vbs_path  = tmp.join("devtool_discord_dm.vbs");
-    let ps1_str   = ps1_path.to_string_lossy().to_string();
+    let ps1_path = std::env::temp_dir().join("devtool_discord_dm.ps1");
 
-    // PowerShell: use Win32 ShowWindow(SW_RESTORE) + SetForegroundWindow so the
-    // window actually surfaces even when minimised to taskbar or sitting in tray.
-    let ps1 = r#"
+    // Single PowerShell script that does everything:
+    //   1. Win32 ShowWindow/SetForegroundWindow to restore a minimised window
+    //   2. WScript.Shell COM for AppActivate + SendKeys (same API as VBScript)
+    // Run via std::process::Command directly (no CREATE_NO_WINDOW) so the
+    // process lives on the interactive desktop and can interact with other windows.
+    // -WindowStyle Hidden keeps the console invisible.
+    let ps1 = format!(
+r#"$wsh = New-Object -ComObject WScript.Shell
+
 $sig = @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 '@
 Add-Type -MemberDefinition $sig -Name Win32 -Namespace WH -ErrorAction SilentlyContinue
 
-function Restore-Discord {
+function Restore-Discord {{
     $p = Get-Process discord -ErrorAction SilentlyContinue |
-         Where-Object { $_.MainWindowHandle -ne 0 } |
+         Where-Object {{ $_.MainWindowHandle -ne 0 }} |
          Select-Object -First 1
-    if ($p) {
-        [WH.Win32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null   # SW_RESTORE
+    if ($p) {{
+        [WH.Win32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
         Start-Sleep -Milliseconds 300
         [WH.Win32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
         return $true
-    }
+    }}
     return $false
-}
+}}
 
-# If Discord is in tray (no visible window), open it via protocol first
-if (-not (Restore-Discord)) {
+if (-not (Restore-Discord)) {{
     Start-Process "cmd" -ArgumentList "/c start discord:"
     Start-Sleep -Seconds 3
     Restore-Discord | Out-Null
-}
-"#;
+}}
 
-    // VBScript: runs the PS1 (waits for it), then AppActivate + SendKeys.
-    // Using wscript.exe so the script runs as a desktop GUI process — required
-    // for AppActivate and SendKeys to reach the correct window.
-    let vbs = format!(r#"Set wsh = CreateObject("WScript.Shell")
+Start-Sleep -Milliseconds 600
 
-' Step 1 - restore/focus Discord via Win32 (handles minimised, tray, not running)
-wsh.Run "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{ps1}""", 0, True
+for ($i = 0; $i -lt 10; $i++) {{
+    if ($wsh.AppActivate("Discord")) {{ break }}
+    Start-Sleep -Milliseconds 400
+}}
 
-WScript.Sleep 400
+Start-Sleep -Milliseconds 600
 
-' Step 2 - make sure Discord is the foreground window (retry up to 10x)
-Dim i
-For i = 1 To 10
-    If wsh.AppActivate("Discord") Then Exit For
-    WScript.Sleep 400
-Next
-
-WScript.Sleep 500
-
-' Step 3 - clear any open panel, open DM search, type name, Enter to open chat
-wsh.SendKeys "{{ESC}}"
-WScript.Sleep 250
-wsh.SendKeys "^k"
-WScript.Sleep 900
-wsh.SendKeys "{name}"
-WScript.Sleep 1200
-wsh.SendKeys "{{ENTER}}"
+$wsh.SendKeys("{{ESC}}")
+Start-Sleep -Milliseconds 300
+$wsh.SendKeys("^k")
+Start-Sleep -Milliseconds 900
+$wsh.SendKeys("{name}")
+Start-Sleep -Milliseconds 1200
+$wsh.SendKeys("{{ENTER}}")
 "#,
-        ps1  = ps1_str,
         name = escaped,
     );
 
-    if std::fs::write(&ps1_path, ps1).is_ok() &&
-       std::fs::write(&vbs_path, &vbs).is_ok()
-    {
-        let _ = std::process::Command::new("wscript")
-            .arg(&vbs_path)
+    if std::fs::write(&ps1_path, ps1.as_bytes()).is_ok() {
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-ExecutionPolicy", "Bypass",
+                "-WindowStyle",     "Hidden",
+                "-NonInteractive",
+                "-File",            &ps1_path.to_string_lossy(),
+            ])
             .spawn();
     }
 }
