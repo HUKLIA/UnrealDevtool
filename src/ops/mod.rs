@@ -1,3 +1,4 @@
+pub mod discord;
 pub mod git;
 pub mod package;
 pub mod update;
