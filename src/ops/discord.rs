@@ -1,8 +1,20 @@
 /// Opens Discord on the PC, restores it from minimised/tray, searches for the
 /// username with Ctrl+K, and presses Enter to jump straight into the chat.
-pub fn open_discord_dm(username: &str) {
+/// If `message` is given, types it into the chat box and sends it (Enter).
+pub fn open_discord_dm(username: &str, message: Option<&str>) {
     let escaped = escape_sendkeys(username.trim());
     if escaped.is_empty() { return; }
+
+
+    // Extra SendKeys lines appended after the chat is opened, only when a preset/custom message was provided
+    let message_block = match message.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(msg) => format!(
+            "Start-Sleep -Milliseconds 900\n$wsh.SendKeys(\"{}\")\nStart-Sleep -Milliseconds 400\n$wsh.SendKeys(\"{{ENTER}}\")\n",
+            escape_sendkeys(msg)
+        ),
+        None => String::new(),
+    };
+
 
     let ps1_path = std::env::temp_dir().join("devtool_discord_dm.ps1");
 
@@ -13,7 +25,7 @@ pub fn open_discord_dm(username: &str) {
     // process lives on the interactive desktop and can interact with other windows.
     // -WindowStyle Hidden keeps the console invisible.
     let ps1 = format!(
-r#"$wsh = New-Object -ComObject WScript.Shell
+        r#"$wsh = New-Object -ComObject WScript.Shell
 
 $sig = @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
@@ -56,8 +68,9 @@ Start-Sleep -Milliseconds 900
 $wsh.SendKeys("{name}")
 Start-Sleep -Milliseconds 1200
 $wsh.SendKeys("{{ENTER}}")
-"#,
-        name = escaped,
+{message_block}"#,
+                      name = escaped,
+                      message_block = message_block,
     );
 
     if std::fs::write(&ps1_path, ps1.as_bytes()).is_ok() {
