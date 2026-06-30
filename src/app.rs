@@ -78,6 +78,8 @@ pub struct DevToolApp {
     // Extras
     pub show_dm_spencer_panel: bool,
     pub dm_target_name:        String,
+    pub dm_message_presets:    Vec<String>,
+    pub dm_custom_message:     String,
 
     // Miku view mode: false = 2D gif (default), true = 3D web
     pub miku_mode_3d: bool,
@@ -100,6 +102,7 @@ pub struct DevToolApp {
     pub show_media_config: bool,
     pub custom_gif_path:   Option<PathBuf>,
     pub custom_sound_path: Option<PathBuf>,
+
 }
 
 impl DevToolApp {
@@ -174,6 +177,10 @@ impl DevToolApp {
             pending_open_folder_path:  std::path::PathBuf::new(),
             show_dm_spencer_panel:     false,
             dm_target_name:            "gonkindroid".to_string(),
+            dm_message_presets:        vec!["Hey!".to_string(),
+                                        "You up?".to_string(),
+                                         "Help!!".to_string(),],
+            dm_custom_message:         String::new(),
             miku_mode_3d:              false,
             webview_manager,
             active_web_panel: None,
