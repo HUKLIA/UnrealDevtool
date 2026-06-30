@@ -529,8 +529,42 @@ impl DevToolApp {
                     if ui.add_sized([btn_w, 34.0],
                         egui::Button::new("🔍  Open Discord & Search")).clicked()
                     {
-                        crate::ops::discord::open_discord_dm(&self.dm_target_name);
+                        crate::ops::discord::open_discord_dm(&self.dm_target_name, None);
                     }
+                });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.label(egui::RichText::new("Quick messages (click to send):")
+                    .size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(can_open, |ui| {
+                        for preset in self.dm_message_presets.clone() {
+                            if ui.button(&preset).clicked() {
+                                crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&preset));
+                            }
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+
+                ui.label(egui::RichText::new("Custom message:")
+                    .size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.dm_custom_message)
+                        .desired_width(ui.available_width() - 70.0)
+                        .hint_text("Type a message…"));
+                    let can_send = can_open && !self.dm_custom_message.trim().is_empty();
+                    ui.add_enabled_ui(can_send, |ui| {
+                        if ui.button("Send").clicked() {
+                            crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&self.dm_custom_message.clone()));
+                            self.dm_custom_message.clear();
+                        }
+                    });
                 });
             });
 
