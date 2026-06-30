@@ -529,7 +529,7 @@ impl DevToolApp {
                     if ui.add_sized([btn_w, 34.0],
                         egui::Button::new("🔍  Open Discord & Search")).clicked()
                     {
-                        crate::ops::discord::open_discord_dm(&self.dm_target_name, None);
+                        crate::ops::discord::open_discord_dm(&self.dm_target_name, None, None);
                     }
                 });
 
@@ -544,7 +544,7 @@ impl DevToolApp {
                     ui.add_enabled_ui(can_open, |ui| {
                         for preset in self.dm_message_presets.clone() {
                             if ui.button(&preset).clicked() {
-                                crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&preset));
+                                crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&preset), None);
                             }
                         }
                     });
@@ -561,11 +561,35 @@ impl DevToolApp {
                     let can_send = can_open && !self.dm_custom_message.trim().is_empty();
                     ui.add_enabled_ui(can_send, |ui| {
                         if ui.button("Send").clicked() {
-                            crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&self.dm_custom_message.clone()));
+                            crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&self.dm_custom_message.clone()), None);
                             self.dm_custom_message.clear();
                         }
                     });
                 });
+
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Image to send: ")
+                .size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.dm_image_path)
+                        .desired_width(ui.available_width() - 130.0)
+                        .hint_text("C:\\path\\to\\image.png"));
+                    if ui.button("Browse...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "png", "webp"]).pick_file() {
+                            self.dm_image_path = path.to_string_lossy().to_string();
+                        }
+                    }
+                    let can_imag = can_open && !self.dm_image_path.trim().is_empty();
+                    ui.add_enabled_ui(can_imag, |ui| {
+                        if ui.button("Send").clicked() {
+                            crate::ops::discord::open_discord_dm(&self.dm_target_name
+                                                                 , None
+                                                                 , Some(&self.dm_custom_message.clone()),
+                            );
+                        }
+                    })
+                })
             });
 
         ui.add_space(8.0);

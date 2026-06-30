@@ -80,6 +80,7 @@ pub struct DevToolApp {
     pub dm_target_name:        String,
     pub dm_message_presets:    Vec<String>,
     pub dm_custom_message:     String,
+    pub dm_image_path:         String,
 
     // Miku view mode: false = 2D gif (default), true = 3D web
     pub miku_mode_3d: bool,
@@ -181,6 +182,7 @@ impl DevToolApp {
                                         "You up?".to_string(),
                                          "Help!!".to_string(),],
             dm_custom_message:         String::new(),
+            dm_image_path:             String::new(),
             miku_mode_3d:              false,
             webview_manager,
             active_web_panel: None,
