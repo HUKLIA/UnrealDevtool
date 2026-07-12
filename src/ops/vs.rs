@@ -42,7 +42,7 @@ pub fn rebuild_vs_files(
     if let Ok(entries) = fs::read_dir(&project_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e.eq_ignore_ascii_case("sln")) {
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sln")) {
                 upd!(format!("[1/3] Removing {}…",
                     path.file_name().unwrap_or_default().to_string_lossy()));
                 let _ = fs::remove_file(&path);
@@ -149,20 +149,19 @@ pub fn find_sln(dir: &Path) -> Option<PathBuf> {
     fs::read_dir(dir).ok()?
         .flatten()
         .map(|e| e.path())
-        .find(|p| p.extension().map_or(false, |x| x.eq_ignore_ascii_case("sln")))
+        .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sln")))
 }
 
 pub fn find_rider() -> Option<PathBuf> {
     // 1. PATH (JetBrains Toolbox adds this)
-    if let Ok(o) = crate::ops::cmd("where").arg("rider64.exe").output() {
-        if o.status.success() {
+    if let Ok(o) = crate::ops::cmd("where").arg("rider64.exe").output()
+        && o.status.success() {
             let s = String::from_utf8_lossy(&o.stdout);
             if let Some(line) = s.lines().next() {
                 let p = PathBuf::from(line.trim());
                 if p.exists() { return Some(p); }
             }
         }
-    }
     // 2. JetBrains Toolbox install location
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         let base = PathBuf::from(&local)

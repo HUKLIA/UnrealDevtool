@@ -156,14 +156,13 @@ impl WebViewManager {
         let wanted_panel = wanted.map(|(p, _)| p);
 
         if self.active != wanted_panel {
-            if let Some(prev) = self.active {
-                if let Some(entry) = self.views.get_mut(&prev) {
+            if let Some(prev) = self.active
+                && let Some(entry) = self.views.get_mut(&prev) {
                     if let Ok(v) = &entry.view {
                         let _ = v.set_visible(false);
                     }
                     entry.visible = false;
                 }
-            }
             self.active = wanted_panel;
         }
 

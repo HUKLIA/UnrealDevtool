@@ -105,6 +105,9 @@ pub struct DevToolApp {
     pub show_media_config: bool,
     pub custom_gif_path:   Option<PathBuf>,
     pub custom_sound_path: Option<PathBuf>,
+
+    // Stored so background tasks can call request_repaint() on completion
+    pub egui_ctx: egui::Context,
 }
 
 impl DevToolApp {
@@ -211,7 +214,7 @@ impl DevToolApp {
         let trimmed = self.project_path_input.trim().to_string();
         if trimmed.is_empty() { return; }
         let p = std::path::PathBuf::from(&trimmed);
-        if p.exists() && p.extension().map_or(false, |e| e.eq_ignore_ascii_case("uproject")) {
+        if p.exists() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("uproject")) {
             save_project_path(&p);
             self.project_path = Some(p);
             self.redetect_engine();
@@ -455,8 +458,9 @@ impl DevToolApp {
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
+        let close_editor  = self.close_editor_before_package;
         self.run_background_task("Starting fast UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor)
         });
     }
 

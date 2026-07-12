@@ -130,9 +130,8 @@ pub fn download_and_install(
 /// Delete a leftover `unreal_devtool_old.exe` from a previous update, if present.
 /// Safe to call on every startup.
 pub fn cleanup_old_binary() {
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(dir) = current_exe.parent() {
             let _ = std::fs::remove_file(dir.join("unreal_devtool_old.exe"));
         }
-    }
 }

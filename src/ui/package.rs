@@ -2,7 +2,6 @@ use eframe::egui;
 use crate::app::DevToolApp;
 use crate::theme::*;
 use crate::types::UploadAction;
-use rfd;
 
 impl DevToolApp {
     pub fn show_upload_panel_ui(&mut self, ui: &mut egui::Ui) -> UploadAction {
@@ -55,14 +54,13 @@ impl DevToolApp {
                                 .hint_text("Paste path or Browse…")
                                 .desired_width(ui.available_width() - 86.0),
                         );
-                        if ui.add_sized([80.0, 22.0], egui::Button::new("Browse…")).clicked() {
-                            if let Some(p) = rfd::FileDialog::new()
+                        if ui.add_sized([80.0, 22.0], egui::Button::new("Browse…")).clicked()
+                            && let Some(p) = rfd::FileDialog::new()
                                 .set_title("Select destination folder")
                                 .pick_folder()
                             {
                                 self.upload_local_path = p.to_string_lossy().to_string();
                             }
-                        }
                     });
                 }
 

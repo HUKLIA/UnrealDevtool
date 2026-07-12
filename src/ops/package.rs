@@ -4,6 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// Packages the Unreal project using UAT BuildCookRun.
+/// This function has many arguments by necessity (it runs on a background thread
+/// and receives all inputs by value so no shared references are needed).
+#[allow(clippy::too_many_arguments)]
 pub fn package_game(
     uproject:     PathBuf,
     engine:       PathBuf,
@@ -135,11 +139,10 @@ pub fn package_game(
     upd!("[4/5] Renaming executable…");
     if let Some(found) = find_main_exe(&package_dir) {
         let target_exe = package_dir.join(format!("{}.exe", exe_name));
-        if found != target_exe {
-            if let Err(e) = fs::rename(&found, &target_exe) {
+        if found != target_exe
+            && let Err(e) = fs::rename(&found, &target_exe) {
                 return format!("[ERROR] rename exe: {}", e);
             }
-        }
     }
 
     let zip_name = format!("{}_{}.zip", pack_name, version_str);
@@ -274,13 +277,12 @@ fn rclone_program() -> String {
         if dest.is_file() {
             return dest.to_string_lossy().to_string();
         }
-        if let Some(parent) = dest.parent() {
-            if std::fs::create_dir_all(parent).is_ok()
+        if let Some(parent) = dest.parent()
+            && std::fs::create_dir_all(parent).is_ok()
                 && std::fs::write(&dest, RCLONE_EXE_BYTES).is_ok()
             {
                 return dest.to_string_lossy().to_string();
             }
-        }
     }
     "rclone".to_string()
 }
@@ -485,12 +487,11 @@ pub fn find_next_version(build_dir: &Path) -> u32 {
             // strip "v0." then parse "minor.patch"
             if let Some(rest) = s.strip_prefix("v0.") {
                 let mut parts = rest.splitn(2, '.');
-                if let (Some(m), Some(p)) = (parts.next(), parts.next()) {
-                    if let (Ok(minor), Ok(patch)) = (m.parse::<u32>(), p.parse::<u32>()) {
+                if let (Some(m), Some(p)) = (parts.next(), parts.next())
+                    && let (Ok(minor), Ok(patch)) = (m.parse::<u32>(), p.parse::<u32>()) {
                         let flat = minor * 100 + patch;
                         if flat > highest { highest = flat; }
                     }
-                }
             }
         }
     }
@@ -507,7 +508,7 @@ pub fn find_main_exe(dir: &Path) -> Option<PathBuf> {
     const SKIP: &[&str] = &["CrashReportClient", "UEPrereqSetup_x64", "UEPrereqSetup_x86"];
     fs::read_dir(dir).ok()?
         .flatten()
-        .filter(|e| e.path().extension().map_or(false, |x| x.eq_ignore_ascii_case("exe")))
+        .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")))
         .filter(|e| {
             let stem = e.path().file_stem()
                 .map(|s| s.to_string_lossy().to_string())

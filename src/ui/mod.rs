@@ -167,7 +167,7 @@ impl DevToolApp {
                 });
             });
 
-        let audio_playing = self.audio_player.as_ref().map_or(false, |a| a.is_playing());
+        let audio_playing = self.audio_player.as_ref().is_some_and(|a| a.is_playing());
         if audio_playing {
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
@@ -575,11 +575,10 @@ impl DevToolApp {
                     ui.add(egui::TextEdit::singleline(&mut self.dm_image_path)
                         .desired_width(ui.available_width() - 130.0)
                         .hint_text("C:\\path\\to\\image.png"));
-                    if ui.button("Browse...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "png", "webp"]).pick_file() {
+                    if ui.button("Browse...").clicked()
+                        && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "png", "webp"]).pick_file() {
                             self.dm_image_path = path.to_string_lossy().to_string();
                         }
-                    }
                     let can_imag = can_open && !self.dm_image_path.trim().is_empty();
                     ui.add_enabled_ui(can_imag, |ui| {
                         if ui.button("Send").clicked() {
@@ -628,8 +627,8 @@ impl DevToolApp {
             );
             if resp.lost_focus() { self.try_apply_typed_path(); }
 
-            if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse…")).clicked() {
-                if let Some(path) = rfd::FileDialog::new()
+            if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse…")).clicked()
+                && let Some(path) = rfd::FileDialog::new()
                     .add_filter("Unreal Project", &["uproject"])
                     .set_title("Select your .uproject file")
                     .pick_file()
@@ -639,16 +638,14 @@ impl DevToolApp {
                     self.project_path       = Some(path);
                     self.redetect_engine();
                 }
-            }
 
-            if has_path {
-                if ui.add_sized([extra_btn - gap, 22.0], egui::Button::new("x  Clear")).clicked() {
+            if has_path
+                && ui.add_sized([extra_btn - gap, 22.0], egui::Button::new("x  Clear")).clicked() {
                     clear_project_path();
                     self.project_path = None;
                     self.project_path_input.clear();
                     self.refresh_status();
                 }
-            }
         });
 
         ui.add_space(2.0);
