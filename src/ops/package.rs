@@ -4,16 +4,21 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// Packages the Unreal project using UAT BuildCookRun.
+/// This function has many arguments by necessity (it runs on a background thread
+/// and receives all inputs by value so no shared references are needed).
+#[allow(clippy::too_many_arguments)]
 pub fn package_game(
-    uproject:    PathBuf,
-    engine:      PathBuf,
-    pack_name:   String,
-    exe_name:    String,
-    version_str: String,
-    status:      Arc<Mutex<String>>,
-    pending_zip: Arc<Mutex<Option<PathBuf>>>,
-    cancel:      Arc<AtomicBool>,
-    progress:    Arc<Mutex<f32>>,
+    uproject:     PathBuf,
+    engine:       PathBuf,
+    pack_name:    String,
+    exe_name:     String,
+    version_str:  String,
+    status:       Arc<Mutex<String>>,
+    pending_zip:  Arc<Mutex<Option<PathBuf>>>,
+    cancel:       Arc<AtomicBool>,
+    progress:     Arc<Mutex<f32>>,
+    close_editor: bool,
 ) -> String {
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
     macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
@@ -37,7 +42,9 @@ pub fn package_game(
     prog!(0.05);
 
     check!();
-    close_editor_if_running(&status);
+    if close_editor {
+        close_editor_if_running(&status);
+    }
     check!();
     let runuat = engine.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
     upd!(format!("[2/5] Running UAT BuildCookRun…  (may take 30+ min)\nLog → {}", log_path.display()));
@@ -94,10 +101,16 @@ pub fn package_game(
         }
     };
     if !uat_exit.success() {
+        let editor_hint = if !close_editor && is_editor_running() {
+            "\nTip: Unreal Editor is still open — save your work, close it, then try again."
+        } else {
+            ""
+        };
         return format!(
-            "[ERROR] UAT failed (exit {}).\nLog → {}",
+            "[ERROR] UAT failed (exit {}).\nLog → {}{}",
             uat_exit.code().unwrap_or(-1),
-            log_path.display()
+            log_path.display(),
+            editor_hint,
         );
     }
     prog!(0.80);
@@ -126,11 +139,10 @@ pub fn package_game(
     upd!("[4/5] Renaming executable…");
     if let Some(found) = find_main_exe(&package_dir) {
         let target_exe = package_dir.join(format!("{}.exe", exe_name));
-        if found != target_exe {
-            if let Err(e) = fs::rename(&found, &target_exe) {
+        if found != target_exe
+            && let Err(e) = fs::rename(&found, &target_exe) {
                 return format!("[ERROR] rename exe: {}", e);
             }
-        }
     }
 
     let zip_name = format!("{}_{}.zip", pack_name, version_str);
@@ -140,17 +152,21 @@ pub fn package_game(
     if !package_dir.exists() {
         return format!("[ERROR] Package folder missing: {}", package_dir.display());
     }
+    // Escape single quotes so paths like "Nick's Game" don't break PS string literals
+    let src_esc = package_dir.display().to_string().replace('\'', "''");
+    let dst_esc = zip_path.display().to_string().replace('\'', "''");
     let ps = format!(
         "$ErrorActionPreference='Stop'; \
          Compress-Archive -Path '{src}\\*' -DestinationPath '{dst}' -Force; \
          Write-Host 'Zip OK'",
-        src = package_dir.display(),
-        dst = zip_path.display(),
+        src = src_esc,
+        dst = dst_esc,
     );
     check!();
     prog!(0.90);
     let mut zip_child = match crate::ops::cmd("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .stderr(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c)  => c,
@@ -173,7 +189,29 @@ pub fn package_game(
         }
     };
     if !zip_exit.success() {
-        return "[ERROR] Compress-Archive failed — check the log.".to_string();
+        // Read whatever PowerShell wrote to stderr for a useful error message
+        let stderr_msg = zip_child.stderr
+            .take()
+            .and_then(|mut r| {
+                let mut s = String::new();
+                use std::io::Read;
+                r.read_to_string(&mut s).ok().map(|_| s)
+            })
+            .unwrap_or_default();
+        return if stderr_msg.trim().is_empty() {
+            format!(
+                "[ERROR] Compress-Archive failed (exit {}).\nLog → {}",
+                zip_exit.code().unwrap_or(-1),
+                log_path.display()
+            )
+        } else {
+            format!(
+                "[ERROR] Compress-Archive failed (exit {}):\n{}\nLog → {}",
+                zip_exit.code().unwrap_or(-1),
+                stderr_msg.trim(),
+                log_path.display()
+            )
+        };
     }
     prog!(1.0);
 
@@ -239,13 +277,12 @@ fn rclone_program() -> String {
         if dest.is_file() {
             return dest.to_string_lossy().to_string();
         }
-        if let Some(parent) = dest.parent() {
-            if std::fs::create_dir_all(parent).is_ok()
+        if let Some(parent) = dest.parent()
+            && std::fs::create_dir_all(parent).is_ok()
                 && std::fs::write(&dest, RCLONE_EXE_BYTES).is_ok()
             {
                 return dest.to_string_lossy().to_string();
             }
-        }
     }
     "rclone".to_string()
 }
@@ -378,14 +415,20 @@ pub fn upload_via_rclone(
     }
 }
 
+/// Returns `true` if any known Unreal Editor process is currently running.
+/// Fast — reads the OS process list, no network or disk I/O.
+pub fn is_editor_running() -> bool {
+    const EDITORS: &[&str] = &["UnrealEditor.exe", "UE4Editor.exe"];
+    EDITORS.iter().any(|e| is_process_running(e))
+}
+
 fn close_editor_if_running(status: &Arc<Mutex<String>>) {
     const EDITORS: &[&str] = &["UnrealEditor.exe", "UE4Editor.exe"];
     for editor_exe in EDITORS {
         if !is_process_running(editor_exe) { continue; }
 
         *status.lock().unwrap() = format!(
-            "[PRE-FLIGHT] {} is open — closing it before packaging…\n\
-             (packaging requires the editor to be closed)",
+            "[PRE-FLIGHT] {} is open — closing it before packaging…",
             editor_exe
         );
 
@@ -444,12 +487,11 @@ pub fn find_next_version(build_dir: &Path) -> u32 {
             // strip "v0." then parse "minor.patch"
             if let Some(rest) = s.strip_prefix("v0.") {
                 let mut parts = rest.splitn(2, '.');
-                if let (Some(m), Some(p)) = (parts.next(), parts.next()) {
-                    if let (Ok(minor), Ok(patch)) = (m.parse::<u32>(), p.parse::<u32>()) {
+                if let (Some(m), Some(p)) = (parts.next(), parts.next())
+                    && let (Ok(minor), Ok(patch)) = (m.parse::<u32>(), p.parse::<u32>()) {
                         let flat = minor * 100 + patch;
                         if flat > highest { highest = flat; }
                     }
-                }
             }
         }
     }
@@ -466,7 +508,7 @@ pub fn find_main_exe(dir: &Path) -> Option<PathBuf> {
     const SKIP: &[&str] = &["CrashReportClient", "UEPrereqSetup_x64", "UEPrereqSetup_x86"];
     fs::read_dir(dir).ok()?
         .flatten()
-        .filter(|e| e.path().extension().map_or(false, |x| x.eq_ignore_ascii_case("exe")))
+        .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")))
         .filter(|e| {
             let stem = e.path().file_stem()
                 .map(|s| s.to_string_lossy().to_string())

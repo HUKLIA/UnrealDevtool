@@ -38,23 +38,20 @@ fn find_engine_by_association(assoc: &str) -> Option<PathBuf> {
 /// custom builds. Using the project's `EngineAssociation` field avoids picking
 /// the wrong version when multiple engine versions are installed side-by-side.
 pub fn detect_unreal_engine(uproject: Option<&Path>) -> Option<PathBuf> {
-    if let Some(proj) = uproject {
-        if let Some(assoc) = read_engine_association(proj) {
-            if let Some(dir) = find_engine_by_association(&assoc) {
+    if let Some(proj) = uproject
+        && let Some(assoc) = read_engine_association(proj)
+            && let Some(dir) = find_engine_by_association(&assoc) {
                 return Some(dir);
             }
-        }
-    }
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     for minor in (0..=9).rev() {
         let key = format!("SOFTWARE\\EpicGames\\Unreal Engine\\5.{}", minor);
-        if let Ok(k) = hklm.open_subkey(&key) {
-            if let Ok(dir) = k.get_value::<String, _>("InstalledDirectory") {
+        if let Ok(k) = hklm.open_subkey(&key)
+            && let Ok(dir) = k.get_value::<String, _>("InstalledDirectory") {
                 let bat = PathBuf::from(&dir).join("Engine\\Build\\BatchFiles\\RunUAT.bat");
                 if bat.exists() { return Some(PathBuf::from(dir)); }
             }
-        }
     }
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok(builds) = hkcu.open_subkey("Software\\Epic Games\\Unreal Engine\\Builds") {
