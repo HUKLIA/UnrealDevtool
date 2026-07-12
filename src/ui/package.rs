@@ -242,6 +242,42 @@ impl DevToolApp {
                 }
                 ui.add_space(12.0);
 
+                // ── Editor-open warning ───────────────────────────────────────
+                if self.editor_is_running {
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(45, 35, 15))
+                        .stroke(egui::Stroke::new(1.0, WARN_AMBER))
+                        .rounding(egui::Rounding::same(6.0))
+                        .inner_margin(egui::Margin::same(10.0))
+                        .show(ui, |ui| {
+                            ui.colored_label(WARN_AMBER, "⚠  Unreal Editor is open");
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Packaging with the editor open is possible, but may fail if:\n\
+                                     •  You have unsaved assets (they won't be included in the build)\n\
+                                     •  Live Coding or auto-compile is active (write conflict on Intermediate/)\n\n\
+                                     Save all your work first (Ctrl+S in the editor), then choose below."
+                                ).size(10.5).color(egui::Color32::from_rgb(210, 190, 140)),
+                            );
+                            ui.add_space(6.0);
+                            ui.checkbox(
+                                &mut self.close_editor_before_package,
+                                egui::RichText::new("Close the editor automatically before packaging  (recommended)")
+                                    .size(11.5)
+                                    .color(egui::Color32::WHITE),
+                            );
+                            if !self.close_editor_before_package {
+                                ui.add_space(2.0);
+                                ui.colored_label(
+                                    WARN_AMBER,
+                                    "The editor will stay open. Save everything before starting.",
+                                );
+                            }
+                        });
+                    ui.add_space(8.0);
+                }
+
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(can_start, |ui| {
                         if ui.add_sized([150.0, 32.0], egui::Button::new(">>  Start Packaging")).clicked() {

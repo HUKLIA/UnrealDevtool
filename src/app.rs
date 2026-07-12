@@ -40,12 +40,14 @@ pub struct DevToolApp {
     pub progress:             Arc<Mutex<f32>>,
 
     // Package pre-flight
-    pub show_package_config:  bool,
-    pub pack_name_input:      String,
-    pub exe_name_input:       String,
-    pub next_version_preview: u32,
-    pub use_custom_version:   bool,
-    pub version_override:     String,
+    pub show_package_config:        bool,
+    pub pack_name_input:            String,
+    pub exe_name_input:             String,
+    pub next_version_preview:       u32,
+    pub use_custom_version:         bool,
+    pub version_override:           String,
+    pub editor_is_running:          bool,   // snapshotted when config panel opens
+    pub close_editor_before_package: bool,  // user toggle; default true (safe)
 
     // VS-rebuild pre-flight
     pub show_vs_config: bool,
@@ -103,7 +105,6 @@ pub struct DevToolApp {
     pub show_media_config: bool,
     pub custom_gif_path:   Option<PathBuf>,
     pub custom_sound_path: Option<PathBuf>,
-
 }
 
 impl DevToolApp {
@@ -150,12 +151,14 @@ impl DevToolApp {
             busy_label:  String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             progress:    Arc::new(Mutex::new(0.0_f32)),
-            show_package_config:  false,
-            pack_name_input:      String::new(),
-            exe_name_input:       String::new(),
-            next_version_preview: 1,
-            use_custom_version:   false,
-            version_override:     String::new(),
+            show_package_config:         false,
+            pack_name_input:             String::new(),
+            exe_name_input:              String::new(),
+            next_version_preview:        1,
+            use_custom_version:          false,
+            version_override:            String::new(),
+            editor_is_running:           false,
+            close_editor_before_package: true,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
             pending_zip:        Arc::new(Mutex::new(None)),
@@ -195,6 +198,7 @@ impl DevToolApp {
             show_media_config:  false,
             custom_gif_path,
             custom_sound_path,
+            egui_ctx: cc.egui_ctx.clone(),
         };
         ops_update::cleanup_old_binary();
         app.check_for_updates(cc.egui_ctx.clone());
@@ -365,6 +369,9 @@ impl DevToolApp {
         // version; the user can tick "Custom" to keep/change it.
         self.version_override   = ops_package::format_version(self.next_version_preview);
         self.use_custom_version  = false;
+        // Snapshot whether the editor is running right now so the config panel
+        // can show the appropriate warning without calling tasklist every frame.
+        self.editor_is_running = ops_package::is_editor_running();
         self.show_package_config = true;
         self.show_vs_config      = false;
         self.git_state           = GitState::Idle;
@@ -406,8 +413,9 @@ impl DevToolApp {
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
+        let close_editor  = self.close_editor_before_package;
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor)
         });
     }
 
@@ -625,15 +633,30 @@ impl DevToolApp {
         F: FnOnce() -> String + Send + 'static,
     {
         self.cancel_flag.store(false, Ordering::Relaxed);
-        *self.progress.lock().unwrap()       = 0.0;
-        *self.is_working.lock().unwrap()     = true;
-        *self.status_message.lock().unwrap() = start_msg.to_string();
+        *self.progress.lock().unwrap_or_else(|e| e.into_inner()) = 0.0;
+        *self.is_working.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *self.status_message.lock().unwrap_or_else(|e| e.into_inner()) = start_msg.to_string();
         let status  = Arc::clone(&self.status_message);
         let working = Arc::clone(&self.is_working);
+        let ctx     = self.egui_ctx.clone();
         thread::spawn(move || {
-            let result = task();
-            *status.lock().unwrap()  = result;
-            *working.lock().unwrap() = false;
+            // catch_unwind prevents a panic inside the task from propagating out
+            // of the thread and poisoning the shared Mutexes — a poisoned Mutex
+            // would cause every subsequent .lock().unwrap() on the UI thread to
+            // panic and crash the whole app.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task))
+                .unwrap_or_else(|_| {
+                    "[ERROR] Packaging crashed unexpectedly — please try again. \
+                     If this keeps happening, check available disk space and that \
+                     the engine path is correct.".to_string()
+                });
+            // Use unwrap_or_else so we can still write through a poisoned mutex
+            // (which would happen if we panicked while the lock was held above).
+            *status.lock().unwrap_or_else(|e| e.into_inner())  = result;
+            *working.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            // Wake the UI immediately — without this the busy screen stays up
+            // until the user moves the mouse (egui is event-driven / reactive).
+            ctx.request_repaint();
         });
     }
 }
