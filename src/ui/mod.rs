@@ -17,13 +17,19 @@ const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let is_busy = *self.is_working.lock().unwrap();
-        self.status_display = self.status_message.lock().unwrap().clone();
+        // `unwrap_or_else(|e| e.into_inner())` recovers from a poisoned lock
+        // instead of panicking. Without this, a panic on any background
+        // thread (packaging, git, upload, update-check) would poison one of
+        // these shared mutexes, and this being the main render loop — called
+        // directly by winit, not wrapped in catch_unwind — the very next
+        // frame would panic too and take the whole app down with it.
+        let is_busy = *self.is_working.lock().unwrap_or_else(|e| e.into_inner());
+        self.status_display = self.status_message.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         // Periodic update check. Once an update is found we stop polling.
         // `request_repaint_after` lets egui sleep until the next check is due
         // rather than painting every frame just to watch the clock.
-        if self.update_info.lock().unwrap().is_none() {
+        if self.update_info.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
             let elapsed = self.last_update_check.elapsed();
             if elapsed >= UPDATE_CHECK_INTERVAL {
                 self.check_for_updates(ctx.clone());
@@ -37,11 +43,21 @@ impl eframe::App for DevToolApp {
         self.was_working = is_busy;
         if just_finished {
             if let Some(a) = &mut self.audio_player {
-                a.set_speed(1.0);
+                // Stop before resetting speed, not after: `set_speed` restarts
+                // playback (rodio `Player::append`) whenever audio is still
+                // marked playing, and appending right after a stop while the
+                // old sound is still draining makes rodio block the caller
+                // until the audio thread catches up (`sleep_until_end`).
+                // That block runs on this UI thread — normally sub-millisecond,
+                // but if the audio thread is stalled (e.g. the OS deprioritizes
+                // it while the window is locked/minimized) it can hang the
+                // whole app until the audio thread resumes. Stopping first
+                // marks us as not-playing, so `set_speed` skips the restart.
                 a.stop();
+                a.set_speed(1.0);
             }
             self.fast_package_mode = false;
-            let git_status = self.git_result.lock().unwrap().take();
+            let git_status = self.git_result.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(gs) = git_status {
                 match gs {
                     GitTaskStatus::Ok => {
@@ -62,7 +78,7 @@ impl eframe::App for DevToolApp {
             }
 
             // If packaging produced a zip, ask about the output folder first
-            if let Some(zip) = self.pending_zip.lock().unwrap().take() {
+            if let Some(zip) = self.pending_zip.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 self.upload_zip_path   = zip.clone();
                 self.upload_use_local  = false;
                 self.upload_use_gdrive = false;
@@ -197,7 +213,7 @@ impl DevToolApp {
             ui.label(egui::RichText::new(&self.busy_label).size(15.0).color(MIKU_TEAL));
             ui.add_space(6.0);
 
-            let real_prog = *self.progress.lock().unwrap();
+            let real_prog = *self.progress.lock().unwrap_or_else(|e| e.into_inner());
 
             if self.fast_package_mode {
                 let done = real_prog >= 1.0;
@@ -324,7 +340,7 @@ impl DevToolApp {
     /// "Update Now".
     pub fn show_update_banner_ui(&mut self, ui: &mut egui::Ui) -> Option<String> {
         if !self.show_update_banner { return None; }
-        let info = self.update_info.lock().unwrap().clone()?;
+        let info = self.update_info.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
 
         let mut clicked_update = false;
         egui::Frame::none()

@@ -380,6 +380,8 @@ pub fn upload_via_rclone(
     let program = rclone_program();
     let mut child = match crate::ops::cmd(&program)
         .args(&copy_args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c)  => c,
@@ -390,28 +392,72 @@ pub fn upload_via_rclone(
         ),
     };
 
-    loop {
+    // Drain stdout/stderr on their own threads as rclone writes them. If we
+    // only read after the process exits, a chatty run (e.g. several retry
+    // warnings) can fill the OS pipe buffer; rclone then blocks on write()
+    // forever and the upload looks like it "just hangs" — this keeps the
+    // pipes empty the whole time so that can't happen.
+    let drain = |mut r: Box<dyn std::io::Read + Send>| -> std::sync::mpsc::Receiver<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            use std::io::Read;
+            let _ = r.read_to_string(&mut buf);
+            let _ = tx.send(buf);
+        });
+        rx
+    };
+    let stdout_rx = child.stdout.take().map(|s| drain(Box::new(s)));
+    let stderr_rx = child.stderr.take().map(|s| drain(Box::new(s)));
+
+    let exit = loop {
         if cancel.load(Ordering::Relaxed) {
             kill_process_tree(child.id());
             let _ = child.wait();
             return "[CANCELLED] rclone upload cancelled.".to_string();
         }
         match child.try_wait() {
-            Ok(Some(code)) => {
-                return if code.success() {
-                    format!("[DONE] Uploaded {} to {}", file_name, target_label)
-                } else {
-                    format!(
-                        "[ERROR] rclone exited with code {}.\n\
-                         Check that the \"{}\" remote is configured (run  rclone config)\n\
-                         and has access to the destination.",
-                        code.code().unwrap_or(-1), remote_name
-                    )
-                };
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(500)),
-            Err(e)   => return format!("[ERROR] Waiting for rclone: {}", e),
+            Ok(Some(code)) => break code,
+            Ok(None)       => std::thread::sleep(Duration::from_millis(500)),
+            Err(e)         => return format!("[ERROR] Waiting for rclone: {}", e),
         }
+    };
+
+    if exit.success() {
+        return format!("[DONE] Uploaded {} to {}", file_name, target_label);
+    }
+
+    // rclone writes the actual reason (expired auth, no permission on the
+    // destination, bad folder ID, network blocked, etc.) to stdout/stderr —
+    // without capturing it the user only ever sees an exit code and has no
+    // way to tell why the upload "just isn't working".
+    let mut detail = String::new();
+    if let Some(rx) = stdout_rx {
+        detail.push_str(&rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default());
+    }
+    if let Some(rx) = stderr_rx {
+        let err = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        if !err.trim().is_empty() {
+            if !detail.trim().is_empty() { detail.push('\n'); }
+            detail.push_str(&err);
+        }
+    }
+    let detail = detail.trim();
+
+    if detail.is_empty() {
+        format!(
+            "[ERROR] rclone exited with code {}.\n\
+             Check that the \"{}\" remote is configured (run  rclone config)\n\
+             and has access to the destination.",
+            exit.code().unwrap_or(-1), remote_name
+        )
+    } else {
+        format!(
+            "[ERROR] rclone exited with code {}:\n{}\n\
+             Check that the \"{}\" remote is configured (run  rclone config)\n\
+             and has access to the destination.",
+            exit.code().unwrap_or(-1), detail, remote_name
+        )
     }
 }
 

@@ -222,7 +222,7 @@ impl DevToolApp {
     }
 
     pub fn set_status(&self, msg: String) {
-        *self.status_message.lock().unwrap() = msg;
+        *self.status_message.lock().unwrap_or_else(|e| e.into_inner()) = msg;
     }
 
     pub fn refresh_status(&self) {

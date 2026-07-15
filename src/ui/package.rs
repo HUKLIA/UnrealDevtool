@@ -134,11 +134,11 @@ impl DevToolApp {
                                 );
                                 if ui.add_sized([190.0, 24.0], egui::Button::new("⚙  Set up Google Drive remote…")).clicked() {
                                     match crate::ops::package::open_rclone_config_setup() {
-                                        Ok(())   => *self.status_message.lock().unwrap() =
+                                        Ok(())   => *self.status_message.lock().unwrap_or_else(|e| e.into_inner()) =
                                             "[INFO] Opened rclone config in a new window — \
                                              create a remote named \"gdrive\" and sign in via the browser prompt.\n\
                                              Come back here and click ↻ to refresh once you're done.".to_string(),
-                                        Err(e)   => *self.status_message.lock().unwrap() =
+                                        Err(e)   => *self.status_message.lock().unwrap_or_else(|e| e.into_inner()) =
                                             format!("[ERROR] Could not open rclone config: {}", e),
                                     }
                                 }
