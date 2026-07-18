@@ -1,3 +1,4 @@
+pub mod ads;
 pub mod discord;
 pub mod git;
 pub mod package;
@@ -14,4 +15,11 @@ pub fn cmd(program: &str) -> Command {
     let mut c = Command::new(program);
     c.creation_flags(CREATE_NO_WINDOW);
     c
+}
+
+/// Opens `url` in the user's default browser via the OS URI handler.
+/// Fire-and-forget: there's nothing actionable to do on the UI thread if no
+/// default browser is registered, so failures are swallowed.
+pub fn open_url(url: &str) {
+    let _ = cmd("cmd").args(["/c", "start", "", url]).spawn();
 }

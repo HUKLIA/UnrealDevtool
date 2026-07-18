@@ -23,7 +23,7 @@ impl DevToolApp {
         let branch_label = format!("Branch: {}", self.git_current_branch);
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🐙  Git").size(13.0).color(MIKU_TEAL));
+            ui.label(egui::RichText::new("🐙  Git").size(13.0).color(accent()));
             ui.add_space(2.0);
             ui.label(egui::RichText::new(&branch_label).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(10.0);
@@ -60,7 +60,7 @@ impl DevToolApp {
         let branch     = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("📤  Commit & Push").size(13.0).color(MIKU_TEAL));
+            ui.label(egui::RichText::new("📤  Commit & Push").size(13.0).color(accent()));
             ui.label(egui::RichText::new(format!(">>  {}", branch)).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Commit message:").size(11.0).color(egui::Color32::GRAY));
@@ -98,7 +98,7 @@ impl DevToolApp {
         let branch     = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🔄  Sync").size(13.0).color(MIKU_TEAL));
+            ui.label(egui::RichText::new("🔄  Sync").size(13.0).color(accent()));
             ui.label(egui::RichText::new(format!("Branch: {}", branch)).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(8.0);
             Self::code_block().show(ui, |ui| {
@@ -127,7 +127,7 @@ impl DevToolApp {
         let from_branch = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🔀  Merge to Main").size(13.0).color(MIKU_TEAL));
+            ui.label(egui::RichText::new("🔀  Merge to Main").size(13.0).color(accent()));
             ui.label(egui::RichText::new(format!("{}  >>  main", from_branch)).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(8.0);
             Self::code_block().show(ui, |ui| {
@@ -160,7 +160,7 @@ impl DevToolApp {
         let branch = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.colored_label(MIKU_TEAL, format!("[OK]  Pushed to  {}", branch));
+            ui.colored_label(accent(), format!("[OK]  Pushed to  {}", branch));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("What next?").size(11.0).color(egui::Color32::GRAY));
             ui.add_space(6.0);
@@ -186,7 +186,7 @@ impl DevToolApp {
         let merged_from = self.git_merged_from.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.colored_label(MIKU_TEAL, format!("[OK]  Merged {}  >>  main", merged_from));
+            ui.colored_label(accent(), format!("[OK]  Merged {}  >>  main", merged_from));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("What next?").size(11.0).color(egui::Color32::GRAY));
             ui.add_space(6.0);
@@ -217,7 +217,7 @@ impl DevToolApp {
         };
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🌿  New Branch").size(13.0).color(MIKU_TEAL));
+            ui.label(egui::RichText::new("🌿  New Branch").size(13.0).color(accent()));
             ui.label(egui::RichText::new(format!("Based on: {}", base_label)).size(11.0).color(egui::Color32::GRAY));
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Branch name:").size(11.0).color(egui::Color32::GRAY));
@@ -252,7 +252,7 @@ impl DevToolApp {
     fn git_frame() -> egui::Frame {
         egui::Frame::none()
             .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(12.0))
     }

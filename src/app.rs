@@ -8,7 +8,7 @@ use eframe::egui;
 
 use crate::audio::AudioPlayer;
 use crate::config::{
-    load_audio_config, load_media_config, load_project_config, load_project_path, load_upload_config,
+    load_audio_config, load_media_config, load_project_config, load_project_path, load_ui_config, load_upload_config,
     save_audio_config, save_media_config, save_project_config, save_project_path, save_upload_config,
     AudioConfig, MediaConfig, UploadConfig,
 };
@@ -62,6 +62,8 @@ pub struct DevToolApp {
     pub upload_local_path:  String,
     pub upload_rclone_dest: String,   // e.g. "gdrive:/Builds/MyGame"
     pub gdrive_remote_status: Option<bool>, // None = not checked yet, Some(found?)
+    pub gdrive_upload_failed:      Arc<Mutex<bool>>, // set by the upload background task
+    pub show_upload_fallback_panel: bool,
 
     // Git state machine
     pub git_state:               GitState,
@@ -101,6 +103,11 @@ pub struct DevToolApp {
     pub fast_package_mode:  bool,
     pub task_started_at:    Option<Instant>,
 
+    // TACHYON packaging ad: plays once (video + its own baked-in audio) in
+    // place of the normal gif/3D preview, then reverts automatically.
+    pub ad_playing:    bool,
+    pub ad_started_at: Option<Instant>,
+
     // Custom media (2D image/GIF + looping sound)
     pub show_media_config: bool,
     pub custom_gif_path:   Option<PathBuf>,
@@ -112,6 +119,10 @@ pub struct DevToolApp {
 
 impl DevToolApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let ui_cfg = load_ui_config();
+        if let Some((r, g, b)) = ui_cfg.accent_rgb {
+            crate::theme::set_accent_value(egui::Color32::from_rgb(r, g, b));
+        }
         apply_miku_theme(&cc.egui_ctx);
         let project_path = load_project_path();
         let engine_dir   = detect_unreal_engine(project_path.as_deref());
@@ -172,6 +183,8 @@ impl DevToolApp {
             upload_local_path:  upload_cfg.local_path,
             upload_rclone_dest: upload_cfg.rclone_dest,
             gdrive_remote_status: None,
+            gdrive_upload_failed: Arc::new(Mutex::new(false)),
+            show_upload_fallback_panel: false,
             git_state:               GitState::Idle,
             git_next_state:          GitState::Idle,
             git_result:              Arc::new(Mutex::new(None)),
@@ -198,6 +211,8 @@ impl DevToolApp {
             last_update_check:  Instant::now(),
             fast_package_mode:  false,
             task_started_at:    None,
+            ad_playing:         false,
+            ad_started_at:      None,
             show_media_config:  false,
             custom_gif_path,
             custom_sound_path,
@@ -357,6 +372,27 @@ impl DevToolApp {
         self.set_status("[OK] Restored default sound.".into());
     }
 
+    // ── TACHYON packaging ad ──────────────────────────────────────────────────
+
+    /// Ends the TACHYON ad (natural `ended` event, safety-timeout, or webview
+    /// load failure) and resumes whatever the user would normally see: gif
+    /// reset to frame 0, looping background music restarted at the correct
+    /// speed. A no-op if the ad isn't currently playing.
+    pub fn end_ad(&mut self) {
+        if !self.ad_playing { return; }
+        self.ad_playing    = false;
+        self.ad_started_at = None;
+        if let Some(g) = &mut self.gif_player { g.reset(); }
+        if let Some(a) = &mut self.audio_player {
+            // `set_speed` only auto-restarts playback when already marked
+            // playing, so calling it before the explicit `play_looping()`
+            // just primes the speed for that call — no stop-then-append
+            // race here since audio was never started for the ad path.
+            a.set_speed(if self.fast_package_mode { 2.5 } else { 1.0 });
+            a.play_looping();
+        }
+    }
+
     // ── Package actions ───────────────────────────────────────────────────────
 
     pub fn open_package_config(&mut self) {
@@ -411,7 +447,16 @@ impl DevToolApp {
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        if let Some(a) = &mut self.audio_player { a.play_looping(); }
+        self.ad_playing = pack_name.eq_ignore_ascii_case("TACHYON") && crate::ops::ads::ad_video_url().is_some();
+        if self.ad_playing {
+            self.ad_started_at = Some(Instant::now());
+            self.webview_manager.restart_ad();
+            // The ad has its own baked-in audio — skip play_looping() so it
+            // doesn't compete with the ad's soundtrack.
+        } else {
+            self.ad_started_at = None;
+            if let Some(a) = &mut self.audio_player { a.play_looping(); }
+        }
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
@@ -453,7 +498,14 @@ impl DevToolApp {
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        if let Some(a) = &mut self.audio_player { a.set_speed(2.5); a.play_looping(); }
+        self.ad_playing = pack_name.eq_ignore_ascii_case("TACHYON") && crate::ops::ads::ad_video_url().is_some();
+        if self.ad_playing {
+            self.ad_started_at = Some(Instant::now());
+            self.webview_manager.restart_ad();
+        } else {
+            self.ad_started_at = None;
+            if let Some(a) = &mut self.audio_player { a.set_speed(2.5); a.play_looping(); }
+        }
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
@@ -485,6 +537,9 @@ impl DevToolApp {
         let cancel      = Arc::clone(&self.cancel_flag);
         let progress    = Arc::clone(&self.progress);
 
+        *self.gdrive_upload_failed.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        let gdrive_failed = Arc::clone(&self.gdrive_upload_failed);
+
         self.show_upload_panel = false;
         self.busy_label = "[ UPLOADING BUILD ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
@@ -500,7 +555,11 @@ impl DevToolApp {
             if use_gdrive {
                 if cancel.load(Ordering::Relaxed) { return "[CANCELLED]".to_string(); }
                 *progress.lock().unwrap() = if use_local { 0.5 } else { 0.1 };
-                parts.push(ops_package::upload_via_rclone(&zip, &rclone_dest, &status, &cancel));
+                let result = ops_package::upload_via_rclone(&zip, &rclone_dest, &status, &cancel);
+                if result.starts_with("[ERROR]") {
+                    *gdrive_failed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                }
+                parts.push(result);
                 *progress.lock().unwrap() = 1.0;
             }
             if parts.is_empty() { return "[DONE] No destination selected — nothing uploaded.".to_string(); }

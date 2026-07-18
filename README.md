@@ -12,13 +12,15 @@ A Windows desktop tool for Unreal Engine 5 developers: packages builds, regenera
 | | |
 |---|---|
 | **Rebuild VS Files** | Cleans generated folders, runs `GenerateProjectFiles.bat`, opens the result in Rider or Visual Studio |
-| **Package Game** | Runs UAT `BuildCookRun`, renames the output, zips it, and optionally uploads to Google Drive via rclone or copies to a local path |
+| **Package Game** | Runs UAT `BuildCookRun`, renames the output, zips it, and optionally uploads to Google Drive via rclone or copies to a local path. Name the package `TACHYON` (any case) and a one-time trailer video plays in place of the usual GIF for that run |
 | **Fast Package** | Same real UAT pipeline as Package Game — progress bar animates at high speed with per-stage sub-bars, GIF plays at 2× speed, and audio plays at 2× speed for the full fast-build feel |
 | **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), or merge current branch into main |
 | **Cookie Clicker** | Embedded Cookie Clicker ([orteil.dashnet.org](https://orteil.dashnet.org/cookieclicker/)) inside the app window with persistent save data across sessions |
 | **3D Miku / 2D Miku** | Toggle between the animated 2D Miku GIF and an embedded 3D Unity WebGL viewer with full mouse-look (pointer lock) support |
 | **Sponder Bird** | Embedded [Sponder Bird](https://nicktam1.github.io/SponderBirdNew/) game inside the app window |
 | **DM on Discord** | Automatically opens Discord on this PC, restores it from minimised/tray, searches for any username via Ctrl+K, and presses Enter to jump straight into the chat. Username is editable in-app |
+| **Customize Miku & Sound** | Swap the 2D GIF/image and looping sound for your own files, and pick a custom accent color for the whole app (persisted, with a one-click reset to the default teal) |
+| **Quick Links** | One-click buttons to open the Unreal Engine documentation assistant and Claude / ChatGPT / Gemini / Kimi in your default browser |
 
 ---
 
@@ -80,6 +82,8 @@ gdrive:/Builds/MyGame
 
 rclone must be in your `PATH`. The remote name must match the prefix you used in the destination field.
 
+If an upload fails (expired auth, no permission on the destination, network blocked, etc.), the Status/Output box shows rclone's actual error and a fallback panel offers to open the build folder and Google Drive in your browser for a manual upload, or retry.
+
 ---
 
 ## Requirements
@@ -96,6 +100,8 @@ rclone must be in your `PATH`. The remote name must match the prefix you used in
 - Engine detection reads `EngineAssociation` from the `.uproject` file to find the exact matching engine version
 - Force push to main is intentionally not implemented
 - The exe is fully portable — no installer or runtime needed (WebView2 aside)
+- The exe bundles rclone.exe and the TACHYON trailer video, so it's a large download (~150 MB) — everything still runs from the single file with no separate assets to manage
+- rclone.exe and the trailer video are extracted to `%APPDATA%\UnrealDevtool\` on first use
 
 ---
 

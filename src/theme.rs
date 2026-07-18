@@ -1,6 +1,8 @@
 use eframe::egui;
+use std::sync::Mutex;
 
-pub const MIKU_TEAL:  egui::Color32 = egui::Color32::from_rgb(57,  197, 187);
+const MIKU_TEAL_DEFAULT: egui::Color32 = egui::Color32::from_rgb(57, 197, 187);
+
 pub const MIKU_PINK:  egui::Color32 = egui::Color32::from_rgb(225,  40, 133);
 pub const DARK_BG:    egui::Color32 = egui::Color32::from_rgb( 20,  20,  25);
 pub const PANEL_BG:   egui::Color32 = egui::Color32::from_rgb( 35,  35,  45);
@@ -10,6 +12,35 @@ pub const ERR_RED:    egui::Color32 = egui::Color32::from_rgb(210,  80,  80);
 pub const HINT_GRAY:  egui::Color32 = egui::Color32::from_rgb(100, 100, 120);
 pub const PANEL_DARK: egui::Color32 = egui::Color32::from_rgb( 25,  25,  35);
 
+/// Process-wide, user-customizable accent color. Replaces what used to be a
+/// `MIKU_TEAL` const — every former bare-const call site now calls `accent()`
+/// instead, so a color picked at runtime propagates everywhere without
+/// threading a value through every function signature.
+static ACCENT: Mutex<egui::Color32> = Mutex::new(MIKU_TEAL_DEFAULT);
+
+pub fn accent() -> egui::Color32 {
+    *ACCENT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn default_accent() -> egui::Color32 {
+    MIKU_TEAL_DEFAULT
+}
+
+/// Sets the accent value only, without re-applying `egui::Visuals`. Used at
+/// startup to seed the saved color before the first `apply_miku_theme` call.
+pub fn set_accent_value(color: egui::Color32) {
+    *ACCENT.lock().unwrap_or_else(|e| e.into_inner()) = color;
+}
+
+/// Sets the accent and immediately re-applies the theme. `Visuals` fields
+/// like `widgets.hovered.bg_fill` are snapshotted by `ctx.set_visuals` at
+/// call time, so a later `ACCENT` change needs a fresh `apply_miku_theme`
+/// call to actually show up in hover/selection colors.
+pub fn set_accent(ctx: &egui::Context, color: egui::Color32) {
+    set_accent_value(color);
+    apply_miku_theme(ctx);
+}
+
 pub fn apply_miku_theme(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.window_fill = DARK_BG;
@@ -17,12 +48,12 @@ pub fn apply_miku_theme(ctx: &egui::Context) {
     v.widgets.inactive.bg_fill   = PANEL_BG;
     v.widgets.inactive.rounding  = egui::Rounding::same(4.0);
     v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::LIGHT_GRAY);
-    v.widgets.hovered.bg_fill    = MIKU_TEAL;
+    v.widgets.hovered.bg_fill    = accent();
     v.widgets.hovered.fg_stroke  = egui::Stroke::new(1.5, egui::Color32::BLACK);
     v.widgets.active.bg_fill     = MIKU_PINK;
     v.widgets.active.fg_stroke   = egui::Stroke::new(1.0, egui::Color32::WHITE);
     v.widgets.active.rounding    = egui::Rounding::same(8.0);
-    v.selection.bg_fill          = MIKU_TEAL;
-    v.selection.stroke           = egui::Stroke::new(1.0, MIKU_TEAL);
+    v.selection.bg_fill          = accent();
+    v.selection.stroke           = egui::Stroke::new(1.0, accent());
     ctx.set_visuals(v);
 }

@@ -16,11 +16,11 @@ impl DevToolApp {
 
         egui::Frame::none()
             .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("📤  Upload / Copy Packaged Build").size(13.0).color(MIKU_TEAL));
+                ui.label(egui::RichText::new("📤  Upload / Copy Packaged Build").size(13.0).color(accent()));
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!("Zip: {}", zip_name))
@@ -96,7 +96,7 @@ impl DevToolApp {
                         match crate::ops::package::drive_folder_id_from_url(dest_trim) {
                             Some(id) => {
                                 ui.colored_label(
-                                    MIKU_TEAL,
+                                    accent(),
                                     format!("✓ Folder link recognized — will upload into folder ID: {}", id),
                                 );
                             }
@@ -125,7 +125,7 @@ impl DevToolApp {
                     ui.horizontal(|ui| {
                         match self.gdrive_remote_status {
                             Some(true) => {
-                                ui.colored_label(MIKU_TEAL, "✓ \"gdrive\" remote is configured.");
+                                ui.colored_label(accent(), "✓ \"gdrive\" remote is configured.");
                             }
                             Some(false) => {
                                 ui.colored_label(
@@ -199,11 +199,11 @@ impl DevToolApp {
 
         egui::Frame::none()
             .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("📦  Package Configuration").size(13.0).color(MIKU_TEAL));
+                ui.label(egui::RichText::new("📦  Package Configuration").size(13.0).color(accent()));
                 ui.add_space(10.0);
 
                 ui.label(egui::RichText::new("Package / folder name:").size(11.0).color(egui::Color32::GRAY));
@@ -221,7 +221,7 @@ impl DevToolApp {
                     if self.use_custom_version {
                         ui.add(egui::TextEdit::singleline(&mut self.version_override).desired_width(80.0));
                     } else {
-                        ui.colored_label(MIKU_TEAL, &auto_version_label);
+                        ui.colored_label(accent(), &auto_version_label);
                         ui.label(egui::RichText::new("(auto-incremented)").size(10.0).color(HINT_GRAY));
                     }
                     if ui.checkbox(&mut self.use_custom_version, "Custom").changed()
@@ -299,11 +299,11 @@ impl DevToolApp {
 
         egui::Frame::none()
             .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("📁  Packaging complete!").size(13.0).color(MIKU_TEAL));
+                ui.label(egui::RichText::new("📁  Packaging complete!").size(13.0).color(accent()));
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!("Output: {}", display))
@@ -323,6 +323,44 @@ impl DevToolApp {
                         self.show_upload_panel      = true;
                     }
                 });
+            });
+    }
+
+    /// Shown when a Google Drive upload attempt fails (bad/expired auth, no
+    /// remote configured, network blocked, etc.) — offers a manual fallback
+    /// instead of leaving the user with only an error string to puzzle over.
+    pub fn show_upload_fallback_panel(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::none()
+            .fill(PANEL_DARK)
+            .stroke(egui::Stroke::new(1.0, WARN_AMBER))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.colored_label(WARN_AMBER, "⚠  Google Drive upload failed");
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("See Status / Output below for the exact reason. Upload manually instead:")
+                        .size(11.0).color(HINT_GRAY),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add_sized([170.0, 30.0], egui::Button::new("📂  Open build folder")).clicked()
+                        && let Some(folder) = self.upload_zip_path.parent() {
+                            let _ = crate::ops::cmd("explorer").arg(folder).spawn();
+                        }
+                    if ui.add_sized([170.0, 30.0], egui::Button::new("🌐  Open Google Drive")).clicked() {
+                        crate::ops::open_url("https://drive.google.com/drive/my-drive");
+                    }
+                });
+                ui.add_space(8.0);
+                if ui.add_sized([160.0, 26.0], egui::Button::new("↻  Retry upload")).clicked() {
+                    self.show_upload_fallback_panel = false;
+                    self.show_upload_panel          = true;
+                }
+                ui.add_space(4.0);
+                if ui.add_sized([100.0, 26.0], egui::Button::new("< Back")).clicked() {
+                    self.show_upload_fallback_panel = false;
+                }
             });
     }
 }

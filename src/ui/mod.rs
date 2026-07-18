@@ -4,7 +4,7 @@ mod vs;
 
 use eframe::egui;
 use crate::app::DevToolApp;
-use crate::config::{clear_project_path, save_project_path};
+use crate::config::{clear_project_path, save_project_path, save_ui_config, UiConfig};
 use crate::theme::*;
 use crate::types::{GitAction, GitState, GitTaskStatus, UploadAction};
 use std::sync::atomic::Ordering;
@@ -14,6 +14,12 @@ use std::sync::atomic::Ordering;
 /// How often to re-check GitHub for a new release while the app is open.
 /// 5 minutes: notices a new build quickly without burning the 60 req/hr limit.
 const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Upper bound on how long the TACHYON ad is allowed to occupy the busy view
+/// before we give up waiting for its `ended` event and revert to normal
+/// gif+music ourselves (video failed to load, autoplay got blocked, etc.).
+/// The clip is ~54s; this gives generous slack for a slow WebView2 cold start.
+const AD_SAFETY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -56,6 +62,12 @@ impl eframe::App for DevToolApp {
                 a.stop();
                 a.set_speed(1.0);
             }
+            // Defensive: the real UAT task finished (e.g. a fast cancel)
+            // while the ad was still playing. Going to idle view either way,
+            // so just clear the flags — no music should start here (the
+            // `a.stop()` above already covers audio correctly).
+            self.ad_playing    = false;
+            self.ad_started_at = None;
             self.fast_package_mode = false;
             let git_status = self.git_result.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(gs) = git_status {
@@ -77,6 +89,16 @@ impl eframe::App for DevToolApp {
                 self.git_next_state = GitState::Idle;
             }
 
+            // A Google Drive upload just failed — offer a manual fallback
+            // instead of leaving the user with only an error string.
+            let gdrive_failed = {
+                let mut f = self.gdrive_upload_failed.lock().unwrap_or_else(|e| e.into_inner());
+                std::mem::take(&mut *f)
+            };
+            if gdrive_failed {
+                self.show_upload_fallback_panel = true;
+            }
+
             // If packaging produced a zip, ask about the output folder first
             if let Some(zip) = self.pending_zip.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 self.upload_zip_path   = zip.clone();
@@ -90,6 +112,16 @@ impl eframe::App for DevToolApp {
                 }
             }
 
+        }
+
+        // TACHYON ad: revert to normal gif+music on its `ended` event, or on
+        // a safety-timeout if that event never arrives.
+        if self.ad_playing {
+            let ended     = self.webview_manager.take_ad_ended();
+            let timed_out = self.ad_started_at.is_some_and(|t| t.elapsed() > AD_SAFETY_TIMEOUT);
+            if ended || timed_out {
+                self.end_ad();
+            }
         }
 
         if let Some(a) = &mut self.audio_player { a.tick(); }
@@ -119,6 +151,9 @@ impl eframe::App for DevToolApp {
         let ppp = ctx.pixels_per_point();
         if let Some(err) = self.webview_manager.update(self.pending_webview, ppp) {
             self.set_status(err);
+            // Don't make the user wait out the full safety-timeout if the
+            // webview itself failed to load (e.g. WebView2 runtime missing).
+            if self.ad_playing { self.end_ad(); }
         }
     }
 }
@@ -130,55 +165,63 @@ impl DevToolApp {
         if let Some(p) = &self.project_path {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             ui.horizontal(|ui| {
-                ui.colored_label(MIKU_TEAL, "*");
+                ui.colored_label(accent(), "*");
                 ui.label(egui::RichText::new(name.as_ref()).color(egui::Color32::LIGHT_GRAY));
             });
             ui.add_space(6.0);
         }
         let dt = ctx.input(|i| i.stable_dt);
-        if !self.miku_mode_3d {
+        if !self.ad_playing && !self.miku_mode_3d {
             let gif_dt = if self.fast_package_mode { dt * 5.0 } else { dt };
             if let Some(gif) = &mut self.gif_player { gif.advance(ctx, gif_dt); }
         }
 
         // ── 2D / 3D toggle ────────────────────────────────────────────────────
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Miku:").size(11.0).color(HINT_GRAY));
+        // Hidden while the ad plays — switching preview mode mid-ad doesn't
+        // mean anything; whatever mode was selected resumes automatically
+        // once the ad ends, since `miku_mode_3d` is never touched below.
+        if !self.ad_playing {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Miku:").size(11.0).color(HINT_GRAY));
 
-            let active   = egui::Color32::from_rgb(0, 180, 160);
-            let inactive = egui::Color32::from_rgb(40, 40, 55);
+                let active   = egui::Color32::from_rgb(0, 180, 160);
+                let inactive = egui::Color32::from_rgb(40, 40, 55);
 
-            let btn2d = egui::Button::new(egui::RichText::new("2D").size(11.0))
-                .fill(if !self.miku_mode_3d { active } else { inactive });
-            if ui.add_sized([36.0, 20.0], btn2d).clicked() && self.miku_mode_3d {
-                self.miku_mode_3d = false;
-                if let Some(g) = &mut self.gif_player { g.reset(); }
-            }
+                let btn2d = egui::Button::new(egui::RichText::new("2D").size(11.0))
+                    .fill(if !self.miku_mode_3d { active } else { inactive });
+                if ui.add_sized([36.0, 20.0], btn2d).clicked() && self.miku_mode_3d {
+                    self.miku_mode_3d = false;
+                    if let Some(g) = &mut self.gif_player { g.reset(); }
+                }
 
-            let btn3d = egui::Button::new(egui::RichText::new("3D").size(11.0))
-                .fill(if self.miku_mode_3d { active } else { inactive });
-            if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
-                self.miku_mode_3d = true;
-            }
-        });
+                let btn3d = egui::Button::new(egui::RichText::new("3D").size(11.0))
+                    .fill(if self.miku_mode_3d { active } else { inactive });
+                if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
+                    self.miku_mode_3d = true;
+                }
+            });
+        }
         ui.add_space(4.0);
 
         let gif_size = egui::vec2(300.0, 252.0);
         egui::Frame::none()
             .fill(GIF_BG)
-            .stroke(egui::Stroke::new(1.5, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.5, accent()))
             .rounding(egui::Rounding::same(10.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    if self.miku_mode_3d {
+                    if self.ad_playing {
+                        let (rect, _) = ui.allocate_exact_size(gif_size, egui::Sense::hover());
+                        self.pending_webview = Some((crate::webview::WebPanel::Ad, rect));
+                    } else if self.miku_mode_3d {
                         let (rect, _) = ui.allocate_exact_size(gif_size, egui::Sense::hover());
                         self.pending_webview = Some((crate::webview::WebPanel::Miku3D, rect));
                     } else if let Some(gif) = &self.gif_player {
                         gif.show(ui, gif_size);
                     } else {
                         ui.add_space(gif_size.y);
-                        ui.colored_label(MIKU_TEAL, "[ working… ]");
+                        ui.colored_label(accent(), "[ working… ]");
                     }
                 });
             });
@@ -210,7 +253,7 @@ impl DevToolApp {
 
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(&self.busy_label).size(15.0).color(MIKU_TEAL));
+            ui.label(egui::RichText::new(&self.busy_label).size(15.0).color(accent()));
             ui.add_space(6.0);
 
             let real_prog = *self.progress.lock().unwrap_or_else(|e| e.into_inner());
@@ -232,7 +275,7 @@ impl DevToolApp {
 
                 let bar_w = ui.available_width().min(340.0);
                 let steps: &[(&str, f32, egui::Color32)] = &[
-                    ("Compile ",  step(0.0),  MIKU_TEAL),
+                    ("Compile ",  step(0.0),  accent()),
                     ("Cook    ",  step(2.5),  MIKU_PINK),
                     ("Stage   ",  step(5.0),  egui::Color32::from_rgb(180, 160, 60)),
                     ("Pack    ",  step(7.5),  egui::Color32::from_rgb(80, 160, 220)),
@@ -252,7 +295,7 @@ impl DevToolApp {
                 ui.add(
                     egui::ProgressBar::new(overall)
                         .desired_width(bar_w)
-                        .fill(MIKU_TEAL)
+                        .fill(accent())
                         .show_percentage(),
                 );
 
@@ -263,7 +306,7 @@ impl DevToolApp {
                 ui.add(
                     egui::ProgressBar::new(real_prog)
                         .desired_width(ui.available_width().min(340.0))
-                        .fill(MIKU_TEAL)
+                        .fill(accent())
                         .show_percentage(),
                 );
             }
@@ -295,6 +338,9 @@ impl DevToolApp {
 
         } else if self.show_open_folder_panel {
             self.show_open_folder_panel(ui);
+
+        } else if self.show_upload_fallback_panel {
+            self.show_upload_fallback_panel(ui);
 
         } else if self.show_upload_panel {
             let action = self.show_upload_panel_ui(ui);
@@ -345,13 +391,13 @@ impl DevToolApp {
         let mut clicked_update = false;
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(35, 55, 50))
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(6.0))
             .inner_margin(egui::Margin::same(8.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.colored_label(MIKU_TEAL, format!("Update available: {}", info.version));
+                        ui.colored_label(accent(), format!("Update available: {}", info.version));
                         ui.label(egui::RichText::new(format!("Released {}", info.published_at))
                             .size(11.0).color(HINT_GRAY));
                     });
@@ -407,16 +453,35 @@ impl DevToolApp {
         if ui.add_sized(w, egui::Button::new("🎨  Customize Miku & Sound")).clicked() {
             self.open_media_config();
         }
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Quick Links").size(11.0).color(HINT_GRAY));
+        ui.add_space(6.0);
+
+        let gap    = ui.spacing().item_spacing.x;
+        let link_w = (ui.available_width() - gap * 3.0) / 4.0;
+        ui.horizontal(|ui| {
+            if ui.add_sized([link_w, 30.0], egui::Button::new("Claude")).clicked()  { crate::ops::open_url("https://claude.ai/new"); }
+            if ui.add_sized([link_w, 30.0], egui::Button::new("ChatGPT")).clicked() { crate::ops::open_url("https://chatgpt.com/"); }
+            if ui.add_sized([link_w, 30.0], egui::Button::new("Gemini")).clicked()  { crate::ops::open_url("https://gemini.google.com/app"); }
+            if ui.add_sized([link_w, 30.0], egui::Button::new("Kimi")).clicked()    { crate::ops::open_url("https://www.kimi.com/"); }
+        });
+        ui.add_space(8.0);
+        if ui.add_sized(w, egui::Button::new("📘  Unreal Docs")).clicked() {
+            crate::ops::open_url("https://dev.epicgames.com/community/assistant/unreal-engine");
+        }
     }
 
     pub fn show_media_config_panel(&mut self, ui: &mut egui::Ui) {
         egui::Frame::none()
             .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("🎨  Customize Miku & Sound").size(13.0).color(MIKU_TEAL));
+                ui.label(egui::RichText::new("🎨  Customize Miku & Sound").size(13.0).color(accent()));
                 ui.add_space(10.0);
 
                 ui.label(egui::RichText::new("2D Image / GIF").size(11.0).color(egui::Color32::GRAY));
@@ -426,7 +491,7 @@ impl DevToolApp {
                     let thumb_max = 96.0;
                     egui::Frame::none()
                         .fill(GIF_BG)
-                        .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+                        .stroke(egui::Stroke::new(1.0, accent()))
                         .rounding(egui::Rounding::same(6.0))
                         .inner_margin(egui::Margin::same(4.0))
                         .show(ui, |ui| {
@@ -475,7 +540,7 @@ impl DevToolApp {
                     None => ("Ievan Polkka  (default)".to_string(), None),
                 };
                 ui.horizontal(|ui| {
-                    ui.colored_label(MIKU_TEAL, "🔊");
+                    ui.colored_label(accent(), "🔊");
                     ui.label(egui::RichText::new(sound_name).size(13.0).color(egui::Color32::WHITE).strong());
                 });
                 if let Some(hint) = sound_path_hint {
@@ -491,6 +556,25 @@ impl DevToolApp {
                             self.reset_sound_to_default();
                         }
                     });
+                });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.label(egui::RichText::new("Accent Color").size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let mut color = accent();
+                    if ui.color_edit_button_srgba(&mut color).changed() {
+                        crate::theme::set_accent(ui.ctx(), color);
+                        save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())) });
+                    }
+                    ui.add_space(8.0);
+                    if ui.add_sized([160.0, 24.0], egui::Button::new("Reset to default teal")).clicked() {
+                        crate::theme::set_accent(ui.ctx(), crate::theme::default_accent());
+                        save_ui_config(&UiConfig { accent_rgb: None });
+                    }
                 });
 
                 ui.add_space(14.0);
@@ -509,7 +593,7 @@ impl DevToolApp {
                 self.active_web_panel = None;
             }
             ui.add_space(8.0);
-            ui.colored_label(MIKU_TEAL, panel.title());
+            ui.colored_label(accent(), panel.title());
         });
         ui.add_space(6.0);
 
@@ -527,7 +611,7 @@ impl DevToolApp {
 
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(30, 30, 40))
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
@@ -668,7 +752,7 @@ impl DevToolApp {
         match &self.project_path {
             Some(p) => {
                 let name = p.file_name().unwrap_or_default().to_string_lossy();
-                ui.colored_label(MIKU_TEAL, format!("[OK]  {}", name));
+                ui.colored_label(accent(), format!("[OK]  {}", name));
             }
             None if !self.project_path_input.trim().is_empty() => {
                 ui.colored_label(ERR_RED, "[!]  File not found or not a .uproject");

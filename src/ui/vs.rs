@@ -9,11 +9,11 @@ impl DevToolApp {
 
         egui::Frame::none()
             .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, MIKU_TEAL))
+            .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("🔧  Rebuild Project Files").size(13.0).color(MIKU_TEAL));
+                ui.label(egui::RichText::new("🔧  Rebuild Project Files").size(13.0).color(accent()));
                 ui.add_space(8.0);
 
                 ui.label(egui::RichText::new("Will clean from project folder:").size(11.0).color(egui::Color32::GRAY));
@@ -44,7 +44,7 @@ impl DevToolApp {
                             egui::RichText::new(label)
                                 .color(if selected { DARK_BG } else { egui::Color32::LIGHT_GRAY }),
                         )
-                        .fill(if selected { MIKU_TEAL } else { PANEL_BG });
+                        .fill(if selected { accent() } else { PANEL_BG });
                         if ui.add_sized([110.0, 30.0], btn).clicked() {
                             self.ide_choice = choice;
                         }
