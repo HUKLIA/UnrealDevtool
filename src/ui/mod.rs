@@ -128,22 +128,32 @@ impl eframe::App for DevToolApp {
 
         self.pending_webview = None;
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.heading(egui::RichText::new("Unreal Master Toolbox").color(egui::Color32::WHITE));
-            ui.separator();
-            ui.add_space(6.0);
-
-            if is_busy {
-                self.show_busy_view(ui, ctx);
-            } else {
-                self.show_idle_view(ui);
-            }
-
-            ui.add_space(8.0);
-            ui.separator();
+        // Status/Output is pinned to the bottom — always visible regardless
+        // of how tall the button list above grows. Panels must be added
+        // before CentralPanel so it reserves its space first.
+        egui::TopBottomPanel::bottom("status_panel").show(ctx, |ui| {
             ui.add_space(4.0);
             self.show_status_area(ui);
+            ui.add_space(4.0);
+        });
+
+        // Everything else scrolls, so no content is ever unreachable just
+        // because the window is shorter than the current button list —
+        // the window is still freely resizable too, this is on top of that.
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.heading(egui::RichText::new("Unreal Master Toolbox").color(egui::Color32::WHITE));
+                ui.separator();
+                ui.add_space(6.0);
+
+                if is_busy {
+                    self.show_busy_view(ui, ctx);
+                } else {
+                    self.show_idle_view(ui);
+                }
+                ui.add_space(8.0);
+            });
         });
 
         // Sync the embedded WebView2 panel (3D Miku / Cookie Clicker / Sponder
