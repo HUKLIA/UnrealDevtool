@@ -8,11 +8,11 @@ use eframe::egui;
 
 use crate::audio::AudioPlayer;
 use crate::config::{
-    load_audio_config, load_media_config, load_project_config, load_project_path, load_ui_config, load_upload_config,
-    save_audio_config, save_media_config, save_project_config, save_project_path, save_upload_config,
-    AudioConfig, MediaConfig, UploadConfig,
+    clear_engine_path, load_audio_config, load_engine_path, load_media_config, load_project_config, load_project_path,
+    load_ui_config, load_upload_config, save_audio_config, save_engine_path, save_media_config, save_project_config,
+    save_project_path, save_upload_config, AudioConfig, MediaConfig, UploadConfig,
 };
-use crate::engine::{build_init_status, detect_unreal_engine};
+use crate::engine::{build_init_status, detect_unreal_engine, is_valid_engine_dir};
 use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, update as ops_update, vs as ops_vs};
 use crate::ops::update::UpdateInfo;
@@ -25,6 +25,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 pub struct DevToolApp {
     pub engine_dir:           Option<PathBuf>,
+    /// Manually-picked engine folder (persisted). When set and still valid,
+    /// this wins over auto-detection — lets the user recover from
+    /// "[ERROR] Engine not found." when the registry lookup can't find it.
+    pub engine_override:      Option<PathBuf>,
     pub project_path:         Option<PathBuf>,
     pub project_path_input:   String,
     pub status_message:       Arc<Mutex<String>>,
@@ -124,8 +128,10 @@ impl DevToolApp {
             crate::theme::set_accent_value(egui::Color32::from_rgb(r, g, b));
         }
         apply_miku_theme(&cc.egui_ctx);
-        let project_path = load_project_path();
-        let engine_dir   = detect_unreal_engine(project_path.as_deref());
+        let project_path    = load_project_path();
+        let engine_override = load_engine_path().filter(|p| is_valid_engine_dir(p));
+        let engine_dir       = engine_override.clone()
+            .or_else(|| detect_unreal_engine(project_path.as_deref()));
         let init_status  = build_init_status(&engine_dir, &project_path);
         let project_path_input = project_path.as_ref()
             .map(|p| p.to_string_lossy().to_string())
@@ -152,6 +158,7 @@ impl DevToolApp {
         let audio_player = AudioPlayer::new(audio_bytes, audio_cfg.muted, audio_cfg.volume);
         let mut app = Self {
             engine_dir,
+            engine_override,
             project_path,
             project_path_input,
             status_message: Arc::new(Mutex::new(init_status.clone())),
@@ -245,10 +252,44 @@ impl DevToolApp {
     }
 
     /// Re-runs engine detection against the current project and updates
-    /// `engine_dir`. Call whenever the project path changes.
+    /// `engine_dir`. Call whenever the project path changes. A valid manual
+    /// override always wins over auto-detection.
     pub fn redetect_engine(&mut self) {
-        self.engine_dir = detect_unreal_engine(self.project_path.as_deref());
+        self.engine_dir = self.engine_override.clone()
+            .filter(|p| is_valid_engine_dir(p))
+            .or_else(|| detect_unreal_engine(self.project_path.as_deref()));
         self.refresh_status();
+    }
+
+    /// Lets the user manually point at their Unreal Engine install folder —
+    /// the escape hatch for "[ERROR] Engine not found." when auto-detection
+    /// (registry / EngineAssociation) can't locate it, e.g. a source build or
+    /// a non-standard install path. Validates the folder before accepting it.
+    pub fn choose_engine_dir(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Select your Unreal Engine installation folder (e.g. .../UE_5.4)")
+            .pick_folder()
+        else { return };
+
+        if !is_valid_engine_dir(&path) {
+            self.set_status(format!(
+                "[ERROR] Not a valid engine folder — expected to find Engine\\Build\\BatchFiles\\RunUAT.bat under {}",
+                path.display()
+            ));
+            return;
+        }
+
+        save_engine_path(&path);
+        self.engine_override = Some(path);
+        self.redetect_engine();
+        self.set_status(format!("[OK] Engine set: {}", self.engine_dir.as_ref().unwrap().display()));
+    }
+
+    /// Drops the manual engine override and falls back to auto-detection.
+    pub fn clear_engine_override(&mut self) {
+        clear_engine_path();
+        self.engine_override = None;
+        self.redetect_engine();
     }
 
     pub fn git_project_dir(&self) -> Option<PathBuf> {

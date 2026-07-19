@@ -29,6 +29,30 @@ pub fn clear_project_path() {
     }
 }
 
+// ── Manual engine-folder override persistence ────────────────────────────────
+// Used when auto-detection (registry / EngineAssociation) can't find the
+// engine — e.g. a source build, a non-standard install location, or a
+// machine where the Epic Games Launcher registry keys are missing.
+
+pub fn load_engine_path() -> Option<PathBuf> {
+    let content = fs::read_to_string(config_dir()?.join("engine_path.txt")).ok()?;
+    let p = PathBuf::from(content.trim());
+    if p.as_os_str().is_empty() { None } else { Some(p) }
+}
+
+pub fn save_engine_path(path: &Path) {
+    if let Some(dir) = config_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join("engine_path.txt"), path.to_string_lossy().as_bytes());
+    }
+}
+
+pub fn clear_engine_path() {
+    if let Some(dir) = config_dir() {
+        let _ = fs::remove_file(dir.join("engine_path.txt"));
+    }
+}
+
 // ── Per-project build config (`{stem}_build.cfg`) ────────────────────────────
 // Line 1: pack_name   (folder name + zip prefix)
 // Line 2: exe_name    (game exe is renamed to this)

@@ -30,7 +30,14 @@ fn find_engine_by_association(assoc: &str) -> Option<PathBuf> {
         k.get_value::<String, _>("InstalledDirectory").ok()?
     };
     let path = PathBuf::from(&dir);
-    if path.join("Engine\\Build\\BatchFiles\\RunUAT.bat").exists() { Some(path) } else { None }
+    if is_valid_engine_dir(&path) { Some(path) } else { None }
+}
+
+/// True if `dir` looks like the root of an Unreal Engine install — i.e. it
+/// contains `Engine\Build\BatchFiles\RunUAT.bat`. Used both by auto-detection
+/// and to validate a folder the user picks manually.
+pub fn is_valid_engine_dir(dir: &Path) -> bool {
+    dir.join("Engine\\Build\\BatchFiles\\RunUAT.bat").exists()
 }
 
 /// Finds the Unreal Engine installation that matches `uproject` (if provided),
@@ -49,16 +56,15 @@ pub fn detect_unreal_engine(uproject: Option<&Path>) -> Option<PathBuf> {
         let key = format!("SOFTWARE\\EpicGames\\Unreal Engine\\5.{}", minor);
         if let Ok(k) = hklm.open_subkey(&key)
             && let Ok(dir) = k.get_value::<String, _>("InstalledDirectory") {
-                let bat = PathBuf::from(&dir).join("Engine\\Build\\BatchFiles\\RunUAT.bat");
-                if bat.exists() { return Some(PathBuf::from(dir)); }
+                let path = PathBuf::from(&dir);
+                if is_valid_engine_dir(&path) { return Some(path); }
             }
     }
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok(builds) = hkcu.open_subkey("Software\\Epic Games\\Unreal Engine\\Builds") {
         for (_, value) in builds.enum_values().flatten() {
-            let dir = value.to_string();
-            let bat = PathBuf::from(&dir).join("Engine\\Build\\BatchFiles\\RunUAT.bat");
-            if bat.exists() { return Some(PathBuf::from(dir)); }
+            let path = PathBuf::from(value.to_string());
+            if is_valid_engine_dir(&path) { return Some(path); }
         }
     }
     None

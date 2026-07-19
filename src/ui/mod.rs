@@ -340,6 +340,8 @@ impl DevToolApp {
 
         self.show_project_path_row(ui);
         ui.add_space(10.0);
+        self.show_engine_path_row(ui);
+        ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
 
@@ -768,6 +770,43 @@ impl DevToolApp {
                 ui.colored_label(ERR_RED, "[!]  File not found or not a .uproject");
             }
             _ => {}
+        }
+    }
+
+    /// Engine location row: shows the auto-detected (or manually overridden)
+    /// engine folder, with a "Browse…" escape hatch for when auto-detection
+    /// (registry / EngineAssociation lookup) can't find it — e.g. a source
+    /// build or a non-standard install path.
+    pub fn show_engine_path_row(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Unreal Engine")
+            .size(12.0).color(egui::Color32::GRAY));
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            let has_override = self.engine_override.is_some();
+            let path_text = self.engine_dir.as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(not found — click Browse to select it manually)".to_string());
+            ui.add_sized(
+                [ui.available_width() - if has_override { 172.0 } else { 86.0 }, 22.0],
+                egui::Label::new(egui::RichText::new(path_text).size(12.0).color(HINT_GRAY)),
+            );
+
+            if ui.add_sized([78.0, 22.0], egui::Button::new("Browse…")).clicked() {
+                self.choose_engine_dir();
+            }
+            if has_override && ui.add_sized([86.0, 22.0], egui::Button::new("x  Auto-detect")).clicked() {
+                self.clear_engine_override();
+            }
+        });
+
+        ui.add_space(2.0);
+        match (&self.engine_dir, self.engine_override.is_some()) {
+            (Some(_), true)  => { ui.colored_label(accent(), "[OK]  Manual override"); }
+            (Some(_), false) => { ui.colored_label(accent(), "[OK]  Auto-detected"); }
+            (None, _) => {
+                ui.colored_label(ERR_RED, "[!]  Engine not found — select your Unreal Engine install folder");
+            }
         }
     }
 
