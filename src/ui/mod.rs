@@ -734,9 +734,10 @@ impl DevToolApp {
                     let can_imag = can_open && !self.dm_image_path.trim().is_empty();
                     ui.add_enabled_ui(can_imag, |ui| {
                         if ui.button("Send").clicked() {
-                            crate::ops::discord::open_discord_dm(&self.dm_target_name
-                                                                 , None
-                                                                 , Some(&self.dm_custom_message.clone()),
+                            crate::ops::discord::open_discord_dm(
+                                &self.dm_target_name,
+                                None,
+                                Some(&self.dm_image_path.clone()),
                             );
                         }
                     })
