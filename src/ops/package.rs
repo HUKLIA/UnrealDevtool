@@ -171,6 +171,12 @@ pub fn package_game(
 
     let zip_name = format!("{}_{}.zip", pack_name, version_str);
     let zip_path = version_dir.join(&zip_name);
+
+    // Set pending_zip now (before the zip runs) so the "Open Folder" panel
+    // appears even if Compress-Archive fails — UAT already succeeded, so the
+    // build is good regardless of whether we managed to zip it.
+    *pending_zip.lock().unwrap() = Some(zip_path.clone());
+
     upd!(format!("[5/5] Creating {}…", zip_name));
 
     if !package_dir.exists() {
@@ -239,7 +245,6 @@ pub fn package_game(
     }
     prog!(1.0);
 
-    *pending_zip.lock().unwrap() = Some(zip_path.clone());
     format!(
         "[DONE] {} — packaged!\nOutput → {}\nZip    → {}",
         version_str, version_dir.display(), zip_name,
