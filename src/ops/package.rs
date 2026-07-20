@@ -19,6 +19,7 @@ pub fn package_game(
     cancel:       Arc<AtomicBool>,
     progress:     Arc<Mutex<f32>>,
     close_editor: bool,
+    use_space_free_link: bool,
 ) -> String {
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
     macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
@@ -46,7 +47,30 @@ pub fn package_game(
         close_editor_if_running(&status);
     }
     check!();
-    let runuat = engine.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
+
+    // UAT's own batch scripts break on spaces in paths (most commonly hit via
+    // the default "C:\Program Files\Epic Games\..." engine install). If the
+    // user opted into the fix, alias the engine/project dirs to space-free
+    // directory junctions and build the UAT command line from those instead —
+    // the junctions are transparent to the filesystem, so output still lands
+    // in the real `version_dir` computed above.
+    let (engine_for_cmd, project_dir_for_cmd) = if use_space_free_link {
+        let engine_alias = match crate::ops::preflight::ensure_space_free_alias(&engine) {
+            Ok(p)  => p,
+            Err(e) => return format!("[ERROR] Could not create space-free link for engine path: {e}"),
+        };
+        let project_alias = match crate::ops::preflight::ensure_space_free_alias(&project_dir) {
+            Ok(p)  => p,
+            Err(e) => return format!("[ERROR] Could not create space-free link for project path: {e}"),
+        };
+        (engine_alias, project_alias)
+    } else {
+        (engine.clone(), project_dir.clone())
+    };
+    let uproject_for_cmd = project_dir_for_cmd.join(uproject.file_name().unwrap_or_default());
+    let archive_dir_for_cmd = project_dir_for_cmd.join("build").join(&version_str);
+
+    let runuat = engine_for_cmd.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
     upd!(format!("[2/5] Running UAT BuildCookRun…  (may take 30+ min)\nLog → {}", log_path.display()));
 
     // Use spawn() so we can kill the process if the user cancels
@@ -62,11 +86,11 @@ pub fn package_game(
     let mut uat_child = match crate::ops::cmd("cmd")
         .args(["/c", &runuat.to_string_lossy()])
         .arg("BuildCookRun")
-        .arg(format!("-project={}", uproject.display()))
+        .arg(format!("-project={}", uproject_for_cmd.display()))
         .args(["-noP4", "-unattended", "-platform=Win64",
                "-clientconfig=Development", "-serverconfig=Development",
                "-cook", "-allmaps", "-build", "-stage", "-pak", "-archive"])
-        .arg(format!("-archivedirectory={}", version_dir.display()))
+        .arg(format!("-archivedirectory={}", archive_dir_for_cmd.display()))
         .stdout(log_stdout)
         .stderr(log_stderr)
         .spawn()

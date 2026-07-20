@@ -57,6 +57,12 @@ pub struct DevToolApp {
     pub show_vs_config: bool,
     pub ide_choice:     IdeChoice,
 
+    // PC / environment pre-flight checks (engine & project path validity,
+    // space-in-path UAT workaround, disk space)
+    pub show_pc_check:       bool,
+    pub use_space_free_link: bool,
+    pub pc_check_items:      Vec<crate::ops::preflight::CheckItem>,
+
     // Post-package upload panel
     pub pending_zip:        Arc<Mutex<Option<PathBuf>>>,
     pub show_upload_panel:  bool,
@@ -182,6 +188,9 @@ impl DevToolApp {
             close_editor_before_package: true,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
+            show_pc_check:        false,
+            use_space_free_link:  false,
+            pc_check_items:       Vec::new(),
             pending_zip:        Arc::new(Mutex::new(None)),
             show_upload_panel:  false,
             upload_zip_path:    PathBuf::new(),
@@ -290,6 +299,46 @@ impl DevToolApp {
         clear_engine_path();
         self.engine_override = None;
         self.redetect_engine();
+    }
+
+    // ── PC / environment pre-flight ──────────────────────────────────────────
+
+    pub fn open_pc_check(&mut self) {
+        self.show_package_config = false;
+        self.show_vs_config      = false;
+        self.git_state            = GitState::Idle;
+        self.show_pc_check       = true;
+        self.refresh_pc_check();
+    }
+
+    pub fn refresh_pc_check(&mut self) {
+        self.pc_check_items = crate::ops::preflight::run_checks(&self.engine_dir, &self.project_path);
+    }
+
+    /// One-click fix for the "UAT breaks on spaces in paths" issue: aliases
+    /// the engine and/or project folder to a space-free directory junction
+    /// and remembers to route packaging through it from now on. Junctions
+    /// don't touch the real files — they're just an alternate, space-free
+    /// path to the same folder.
+    pub fn apply_space_free_fix(&mut self) {
+        if let Some(engine) = self.engine_dir.clone()
+            && crate::ops::preflight::has_space(&engine)
+        {
+            if let Err(e) = crate::ops::preflight::ensure_space_free_alias(&engine) {
+                self.set_status(format!("[ERROR] {e}"));
+                return;
+            }
+        }
+        if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf())
+            && crate::ops::preflight::has_space(&dir)
+        {
+            if let Err(e) = crate::ops::preflight::ensure_space_free_alias(&dir) {
+                self.set_status(format!("[ERROR] {e}"));
+                return;
+            }
+        }
+        self.use_space_free_link = true;
+        self.set_status("[OK] Space-free link ready — packaging will route through it from now on.".into());
     }
 
     pub fn git_project_dir(&self) -> Option<PathBuf> {
@@ -503,8 +552,9 @@ impl DevToolApp {
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
         let close_editor  = self.close_editor_before_package;
+        let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
         });
     }
 
@@ -552,8 +602,9 @@ impl DevToolApp {
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
         let close_editor  = self.close_editor_before_package;
+        let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting fast UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
         });
     }
 

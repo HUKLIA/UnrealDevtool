@@ -2,6 +2,7 @@ pub mod ads;
 pub mod discord;
 pub mod git;
 pub mod package;
+pub mod preflight;
 pub mod update;
 pub mod vs;
 

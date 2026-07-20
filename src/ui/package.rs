@@ -240,6 +240,8 @@ impl DevToolApp {
                 }
                 ui.add_space(12.0);
 
+                self.show_space_warning_inline(ui);
+
                 // ── Editor-open warning ───────────────────────────────────────
                 if self.editor_is_running {
                     egui::Frame::none()

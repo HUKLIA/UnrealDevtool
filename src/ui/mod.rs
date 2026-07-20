@@ -1,5 +1,6 @@
 mod git;
 mod package;
+mod preflight;
 mod vs;
 
 use eframe::egui;
@@ -373,6 +374,9 @@ impl DevToolApp {
             let go = self.show_vs_config_panel(ui);
             if go { self.start_vs_rebuild(); }
 
+        } else if self.show_pc_check {
+            self.show_pc_check_panel(ui);
+
         } else if !matches!(self.git_state, GitState::Idle) {
             let action = self.show_git_panel(ui);
             match action {
@@ -447,6 +451,11 @@ impl DevToolApp {
         if !have_project {
             ui.add_space(6.0);
             ui.colored_label(WARN_AMBER, "(!)  Set a project path above to enable these actions.");
+        }
+
+        ui.add_space(8.0);
+        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("🩺  Check PC Setup")).clicked() {
+            self.open_pc_check();
         }
 
         ui.add_space(12.0);
