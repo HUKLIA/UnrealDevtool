@@ -1,6 +1,8 @@
 pub mod ads;
+pub mod diagnostics;
 pub mod discord;
 pub mod git;
+pub mod llm;
 pub mod package;
 pub mod preflight;
 pub mod update;

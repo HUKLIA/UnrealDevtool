@@ -78,9 +78,9 @@ pub struct CheckItem {
     pub detail: String,
 }
 
-/// Runs a fast, synchronous set of environment checks — safe to call
-/// directly from a UI button click (nothing here should take more than a
-/// couple hundred ms).
+/// Runs the checks that need no I/O — pure string/path inspection, safe to
+/// call directly on the UI thread. The disk-space check is separate (see
+/// [`disk_space_check_item`]) since it needs a background thread.
 pub fn run_checks(engine_dir: &Option<PathBuf>, project_path: &Option<PathBuf>) -> Vec<CheckItem> {
     let mut items = Vec::new();
 
@@ -128,26 +128,31 @@ pub fn run_checks(engine_dir: &Option<PathBuf>, project_path: &Option<PathBuf>) 
         });
     }
 
-    if let Some(dir) = project_path.as_ref().and_then(|p| p.parent()) {
-        if let Some(free_gb) = free_space_gb(dir) {
-            if free_gb < 15.0 {
-                items.push(CheckItem {
-                    status: CheckStatus::Warn, label: "Disk space".into(),
-                    detail: format!(
-                        "Only {free_gb:.1} GB free on that drive — cook + stage + archive + zip \
-                         typically needs 15-30+ GB."
-                    ),
-                });
-            } else {
-                items.push(CheckItem {
-                    status: CheckStatus::Ok, label: "Disk space".into(),
-                    detail: format!("{free_gb:.1} GB free"),
-                });
-            }
-        }
-    }
-
     items
+}
+
+/// Disk-space check, split out from [`run_checks`] because it shells out to
+/// PowerShell — slow enough (cold-start overhead, sometimes 200ms-1s+) that
+/// running it synchronously on the UI thread freezes the window (Windows
+/// shows the "not responding" ghost overlay until it returns). Callers must
+/// run this on a background thread, same as every other slow operation in
+/// this app, and post the result back via a shared `Arc<Mutex<_>>`.
+pub fn disk_space_check_item(dir: &Path) -> Option<CheckItem> {
+    let free_gb = free_space_gb(dir)?;
+    Some(if free_gb < 15.0 {
+        CheckItem {
+            status: CheckStatus::Warn, label: "Disk space".into(),
+            detail: format!(
+                "Only {free_gb:.1} GB free on that drive — cook + stage + archive + zip \
+                 typically needs 15-30+ GB."
+            ),
+        }
+    } else {
+        CheckItem {
+            status: CheckStatus::Ok, label: "Disk space".into(),
+            detail: format!("{free_gb:.1} GB free"),
+        }
+    })
 }
 
 fn free_space_gb(path: &Path) -> Option<f64> {

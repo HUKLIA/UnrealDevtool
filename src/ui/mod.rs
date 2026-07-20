@@ -1,3 +1,4 @@
+mod chat;
 mod git;
 mod package;
 mod preflight;
@@ -24,6 +25,8 @@ const AD_SAFETY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90
 
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.center_window_on_startup(ctx);
+
         // `unwrap_or_else(|e| e.into_inner())` recovers from a poisoned lock
         // instead of panicking. Without this, a panic on any background
         // thread (packaging, git, upload, update-check) would poison one of
@@ -126,6 +129,19 @@ impl eframe::App for DevToolApp {
         }
 
         if let Some(a) = &mut self.audio_player { a.tick(); }
+
+        // Chat: once the background stream finishes, fold the accumulated
+        // reply into history — mirrors the was_working/just_finished pattern
+        // above, since the streaming buffer only lives in a shared Mutex the
+        // background thread can reach, not directly in chat_history.
+        let chat_busy_now = *self.chat_busy.lock().unwrap_or_else(|e| e.into_inner());
+        if self.was_chat_busy && !chat_busy_now {
+            let reply = std::mem::take(&mut *self.chat_streaming.lock().unwrap_or_else(|e| e.into_inner()));
+            if !reply.is_empty() {
+                self.chat_history.push(crate::ops::llm::ChatMessage { role: "assistant".into(), content: reply });
+            }
+        }
+        self.was_chat_busy = chat_busy_now;
 
         self.pending_webview = None;
 
@@ -377,6 +393,9 @@ impl DevToolApp {
         } else if self.show_pc_check {
             self.show_pc_check_panel(ui);
 
+        } else if self.show_chat_panel {
+            self.show_chat_panel_ui(ui);
+
         } else if !matches!(self.git_state, GitState::Idle) {
             let action = self.show_git_panel(ui);
             match action {
@@ -454,8 +473,12 @@ impl DevToolApp {
         }
 
         ui.add_space(8.0);
-        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("🩺  Check PC Setup")).clicked() {
+        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("🔍  Check PC Setup")).clicked() {
             self.open_pc_check();
+        }
+        ui.add_space(8.0);
+        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("💬  Dev Assistant")).clicked() {
+            self.open_chat_panel();
         }
 
         ui.add_space(12.0);
@@ -746,6 +769,10 @@ impl DevToolApp {
                     .hint_text("Select or paste path to .uproject…")
                     .desired_width(text_w),
             );
+            if !self.project_path_input.is_empty() {
+                let full_path = self.project_path_input.clone();
+                resp.clone().on_hover_text(full_path);
+            }
             if resp.lost_focus() { self.try_apply_typed_path(); }
 
             if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse…")).clicked()
@@ -796,10 +823,14 @@ impl DevToolApp {
             let path_text = self.engine_dir.as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "(not found — click Browse to select it manually)".to_string());
+            // `Label` defaults to `TextWrapMode::Extend` — it does NOT clip to
+            // its allocated size, it grows past it. Without `.truncate()` a
+            // long engine path overlaps the Browse/Auto-detect buttons that
+            // follow it in this row instead of eliding with "…".
             ui.add_sized(
                 [ui.available_width() - if has_override { 172.0 } else { 86.0 }, 22.0],
-                egui::Label::new(egui::RichText::new(path_text).size(12.0).color(HINT_GRAY)),
-            );
+                egui::Label::new(egui::RichText::new(&path_text).size(12.0).color(HINT_GRAY)).truncate(),
+            ).on_hover_text(&path_text);
 
             if ui.add_sized([78.0, 22.0], egui::Button::new("Browse…")).clicked() {
                 self.choose_engine_dir();

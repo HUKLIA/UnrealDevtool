@@ -62,6 +62,10 @@ pub struct DevToolApp {
     pub show_pc_check:       bool,
     pub use_space_free_link: bool,
     pub pc_check_items:      Vec<crate::ops::preflight::CheckItem>,
+    /// `None` while the background disk-space check is still running.
+    pub pc_check_disk:       Arc<Mutex<Option<crate::ops::preflight::CheckItem>>>,
+    pub build_log_path:      Option<PathBuf>,
+    pub build_log_diagnosis: Vec<crate::ops::diagnostics::Diagnosis>,
 
     // Post-package upload panel
     pub pending_zip:        Arc<Mutex<Option<PathBuf>>>,
@@ -123,8 +127,30 @@ pub struct DevToolApp {
     pub custom_gif_path:   Option<PathBuf>,
     pub custom_sound_path: Option<PathBuf>,
 
+    // Dev-assistant chat (local LLM via Ollama / LM Studio)
+    pub show_chat_panel: bool,
+    pub chat_history:    Vec<crate::ops::llm::ChatMessage>,
+    pub chat_input:      String,
+    pub chat_providers:  Arc<Mutex<Vec<(crate::ops::llm::LlmProvider, Vec<String>)>>>,
+    pub chat_detecting:  Arc<Mutex<bool>>,
+    pub chat_provider:   Option<crate::ops::llm::LlmProvider>,
+    pub chat_model:      String,
+    /// Accumulates the in-flight assistant reply while streaming; moved into
+    /// `chat_history` once `chat_busy` flips back to false (see `update()`,
+    /// same was_working/just_finished pattern used for background tasks).
+    pub chat_streaming:  Arc<Mutex<String>>,
+    pub chat_busy:       Arc<Mutex<bool>>,
+    pub was_chat_busy:   bool,
+    pub chat_cancel:     Arc<AtomicBool>,
+
     // Stored so background tasks can call request_repaint() on completion
     pub egui_ctx: egui::Context,
+
+    /// Set once `center_window_on_startup` has actually centered the window.
+    /// After that it never touches window position again — recentering on
+    /// every resize/move fought the user's own drags (window would snap
+    /// back to center and flicker), so this only runs once, at startup.
+    pub has_centered_window: bool,
 }
 
 impl DevToolApp {
@@ -191,6 +217,9 @@ impl DevToolApp {
             show_pc_check:        false,
             use_space_free_link:  false,
             pc_check_items:       Vec::new(),
+            pc_check_disk:        Arc::new(Mutex::new(None)),
+            build_log_path:       None,
+            build_log_diagnosis:  Vec::new(),
             pending_zip:        Arc::new(Mutex::new(None)),
             show_upload_panel:  false,
             upload_zip_path:    PathBuf::new(),
@@ -232,7 +261,19 @@ impl DevToolApp {
             show_media_config:  false,
             custom_gif_path,
             custom_sound_path,
+            show_chat_panel: false,
+            chat_history:    Vec::new(),
+            chat_input:      String::new(),
+            chat_providers:  Arc::new(Mutex::new(Vec::new())),
+            chat_detecting:  Arc::new(Mutex::new(false)),
+            chat_provider:   None,
+            chat_model:      String::new(),
+            chat_streaming:  Arc::new(Mutex::new(String::new())),
+            chat_busy:       Arc::new(Mutex::new(false)),
+            was_chat_busy:   false,
+            chat_cancel:     Arc::new(AtomicBool::new(false)),
             egui_ctx: cc.egui_ctx.clone(),
+            has_centered_window: false,
         };
         ops_update::cleanup_old_binary();
         app.check_for_updates(cc.egui_ctx.clone());
@@ -301,6 +342,17 @@ impl DevToolApp {
         self.redetect_engine();
     }
 
+    /// Scans the most recently written `BuildLog.txt` (if any) for known
+    /// UAT/UBT error signatures. Pure disk read — safe on the UI thread.
+    pub fn scan_last_build_log(&mut self) {
+        self.build_log_path      = None;
+        self.build_log_diagnosis = Vec::new();
+        let Some(proj) = &self.project_path else { return };
+        let Some(log) = crate::ops::diagnostics::latest_build_log(proj) else { return };
+        self.build_log_diagnosis = crate::ops::diagnostics::scan_build_log(&log);
+        self.build_log_path      = Some(log);
+    }
+
     // ── PC / environment pre-flight ──────────────────────────────────────────
 
     pub fn open_pc_check(&mut self) {
@@ -313,6 +365,26 @@ impl DevToolApp {
 
     pub fn refresh_pc_check(&mut self) {
         self.pc_check_items = crate::ops::preflight::run_checks(&self.engine_dir, &self.project_path);
+        self.scan_last_build_log();
+
+        // Disk space needs a PowerShell spawn (slow, cold-start overhead) —
+        // running that on the UI thread would freeze the window until it
+        // returns, so it goes on a background thread like every other
+        // slow operation in this app.
+        *self.pc_check_disk.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()) {
+            let slot = Arc::clone(&self.pc_check_disk);
+            let ctx  = self.egui_ctx.clone();
+            thread::spawn(move || {
+                let item = crate::ops::preflight::disk_space_check_item(&dir);
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(item.unwrap_or(crate::ops::preflight::CheckItem {
+                    status: crate::ops::preflight::CheckStatus::Warn,
+                    label:  "Disk space".into(),
+                    detail: "Could not determine free disk space.".into(),
+                }));
+                ctx.request_repaint();
+            });
+        }
     }
 
     /// One-click fix for the "UAT breaks on spaces in paths" issue: aliases
@@ -343,6 +415,30 @@ impl DevToolApp {
 
     pub fn git_project_dir(&self) -> Option<PathBuf> {
         self.project_path.as_ref()?.parent().map(|p| p.to_path_buf())
+    }
+
+    /// Centers the window on its monitor — once, at startup only. Windows
+    /// doesn't center new windows by default (it cascades them, or eframe
+    /// restores whatever position was persisted from the last run). This
+    /// intentionally does NOT run again on later resizes or moves: an
+    /// earlier version re-centered on every size change, which fought the
+    /// user's own attempts to drag the window (it would snap back and
+    /// flicker) — so after this first call, the window is fully free to be
+    /// moved and resized without any interference.
+    pub fn center_window_on_startup(&mut self, ctx: &egui::Context) {
+        if self.has_centered_window { return; }
+        let (outer_rect, monitor_size) = ctx.input(|i| {
+            let vp = i.viewport();
+            (vp.outer_rect, vp.monitor_size)
+        });
+        let (Some(outer_rect), Some(monitor_size)) = (outer_rect, monitor_size) else { return };
+        self.has_centered_window = true;
+        let size = outer_rect.size();
+        let pos = egui::pos2(
+            ((monitor_size.x - size.x) / 2.0).max(0.0),
+            ((monitor_size.y - size.y) / 2.0).max(0.0),
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
     }
 
     // ── Self-update ───────────────────────────────────────────────────────────
@@ -813,5 +909,108 @@ impl DevToolApp {
             // until the user moves the mouse (egui is event-driven / reactive).
             ctx.request_repaint();
         });
+    }
+
+    // ── Dev-assistant chat (local LLM) ───────────────────────────────────────
+
+    pub fn open_chat_panel(&mut self) {
+        self.show_package_config = false;
+        self.show_vs_config      = false;
+        self.show_pc_check       = false;
+        self.git_state           = GitState::Idle;
+        self.show_chat_panel     = true;
+        let have_any = !self.chat_providers.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+        if !have_any { self.detect_chat_providers(); }
+    }
+
+    /// Probes Ollama/LM Studio for reachability + available models on a
+    /// background thread — even a localhost HTTP call shouldn't block the
+    /// UI thread (the common case is "nothing is running", and DNS/socket
+    /// setup still costs real time).
+    pub fn detect_chat_providers(&mut self) {
+        let mut detecting = self.chat_detecting.lock().unwrap_or_else(|e| e.into_inner());
+        if *detecting { return; }
+        *detecting = true;
+        drop(detecting);
+
+        let providers = Arc::clone(&self.chat_providers);
+        let detecting = Arc::clone(&self.chat_detecting);
+        let ctx       = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let found = crate::ops::llm::detect_providers();
+            *providers.lock().unwrap_or_else(|e| e.into_inner()) = found;
+            *detecting.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Context the assistant gets on every turn so it can actually help
+    /// troubleshoot this project, not just chat in a vacuum.
+    fn chat_system_context(&self) -> String {
+        format!(
+            "You are a helpful assistant embedded in \"Unreal DevTool\", a Windows GUI for \
+             packaging and managing an Unreal Engine project. Current context:\n\
+             - Engine: {}\n\
+             - Project: {}\n\
+             - Git branch: {}\n\
+             - Last status: {}\n\
+             Use this context to help troubleshoot build/packaging/git issues when it's \
+             relevant to the question. Keep answers concise.",
+            self.engine_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into()),
+            self.project_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not set".into()),
+            if self.git_current_branch.is_empty() { "unknown" } else { &self.git_current_branch },
+            self.status_display.replace('\n', " "),
+        )
+    }
+
+    pub fn send_chat_message(&mut self) {
+        let text = self.chat_input.trim().to_string();
+        if text.is_empty() { return; }
+        if *self.chat_busy.lock().unwrap_or_else(|e| e.into_inner()) { return; }
+        let Some(provider) = self.chat_provider else { return };
+        if self.chat_model.is_empty() { return; }
+
+        self.chat_history.push(crate::ops::llm::ChatMessage { role: "user".into(), content: text });
+        self.chat_input.clear();
+
+        let mut messages = vec![crate::ops::llm::ChatMessage {
+            role: "system".into(), content: self.chat_system_context(),
+        }];
+        messages.extend(self.chat_history.iter().cloned());
+
+        self.chat_cancel.store(false, Ordering::Relaxed);
+        *self.chat_streaming.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+        *self.chat_busy.lock().unwrap_or_else(|e| e.into_inner())      = true;
+
+        let model     = self.chat_model.clone();
+        let streaming = Arc::clone(&self.chat_streaming);
+        let busy      = Arc::clone(&self.chat_busy);
+        let cancel    = Arc::clone(&self.chat_cancel);
+        let ctx       = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::ops::llm::stream_chat(provider, &model, &messages, &cancel, |tok| {
+                    streaming.lock().unwrap_or_else(|e| e.into_inner()).push_str(tok);
+                    ctx.request_repaint();
+                })
+            }));
+            match result {
+                Ok(Err(e)) => {
+                    let mut s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                    if s.is_empty() { s.push_str(&format!("[ERROR] {e}")); }
+                }
+                Err(_) => {
+                    streaming.lock().unwrap_or_else(|e| e.into_inner())
+                        .push_str("\n[ERROR] Chat request crashed unexpectedly.");
+                }
+                Ok(Ok(())) => {}
+            }
+            *busy.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn cancel_chat_message(&mut self) {
+        self.chat_cancel.store(true, Ordering::Relaxed);
     }
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe  = "0.27.2"                               # GUI framework
+eframe  = "0.29"                                 # GUI framework
 winreg  = "0.52.0"                               # Find Unreal Engine via registry
 rfd     = "0.14"                                 # Native file/folder picker
 image   = { version = "0.25", features = ["gif"] } # GIF frame decoding
@@ -13,6 +13,7 @@ wry               = "0.40"                       # Embedded WebView2 (Cookie Cli
 raw-window-handle = "0.6"                        # Bridge winit's window handle to wry
 ureq    = { version = "2.10", features = ["json", "tls"] } # GitHub release check / self-update download
 serde   = { version = "1", features = ["derive"] }          # Parse GitHub release JSON
+serde_json = "1"                                             # Stream/parse Ollama & LM Studio chat chunks
 
 [profile.release]
 opt-level   = 3       # full optimisation
