@@ -70,6 +70,41 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
     }))
 }
 
+/// Retries a fallible file operation a few times with backoff — the standard
+/// fix for Windows `ERROR_SHARING_VIOLATION` (os error 32, "being used by
+/// another process"), which very commonly happens for a brief window right
+/// after writing a fresh .exe to disk: antivirus real-time protection grabs
+/// it for scanning the instant our own handle closes, holding an exclusive
+/// lock for anywhere from a few hundred ms up to a couple of seconds. This
+/// covers about 3s of total backoff, which comfortably rides that out.
+fn retry_file_op<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut last_err = None;
+    for attempt in 0..8u32 {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(150 * (attempt + 1) as u64));
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+/// True if we can actually write to `dir` — cheap probe (create+delete a
+/// temp file). Directories like `C:\Program Files\...` are writable by
+/// Administrators only by default; a standard user's process installed
+/// there can never self-update no matter how many times it retries, so this
+/// lets us fail fast with a clear, actionable message instead of a cryptic
+/// OS error after downloading the whole release.
+fn dir_is_writable(dir: &std::path::Path) -> bool {
+    let probe = dir.join(".unreal_devtool_write_test");
+    match std::fs::File::create(&probe) {
+        Ok(_) => { let _ = std::fs::remove_file(&probe); true }
+        Err(_) => false,
+    }
+}
+
 /// Download the new exe and replace the running one in-place, then relaunch it.
 ///
 /// Windows allows renaming a running executable (it only blocks deletion of an
@@ -84,6 +119,18 @@ pub fn download_and_install(
 ) -> Result<(), String> {
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = current_exe.parent().ok_or("could not resolve install directory")?;
+
+    if !dir_is_writable(dir) {
+        let hint = if dir.to_string_lossy().to_ascii_lowercase().contains("program files") {
+            " (it's installed under Program Files, which normal user accounts can't write to — \
+              right-click the exe and \"Run as administrator\", or move the app to a folder like \
+              Documents or a dedicated tools folder outside Program Files)"
+        } else {
+            ""
+        };
+        return Err(format!("no write access to {}{hint}", dir.display()));
+    }
+
     let new_path = dir.join("unreal_devtool_update.exe");
     let old_path = dir.join("unreal_devtool_old.exe");
 
@@ -119,11 +166,17 @@ pub fn download_and_install(
 
     *status.lock().unwrap() = "Installing update…".into();
     let _ = std::fs::remove_file(&old_path);
-    std::fs::rename(&current_exe, &old_path)
+    // Every step below touches a file that antivirus may have just grabbed
+    // for scanning (the exe we're renaming aside, or the one we just
+    // finished writing) — retry_file_op rides out that transient lock
+    // instead of failing on the first sharing violation.
+    retry_file_op(|| std::fs::rename(&current_exe, &old_path))
         .map_err(|e| format!("could not replace running exe: {e}"))?;
-    std::fs::rename(&new_path, &current_exe).map_err(|e| e.to_string())?;
+    retry_file_op(|| std::fs::rename(&new_path, &current_exe))
+        .map_err(|e| e.to_string())?;
 
-    std::process::Command::new(&current_exe).spawn().map_err(|e| e.to_string())?;
+    retry_file_op(|| std::process::Command::new(&current_exe).spawn())
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
