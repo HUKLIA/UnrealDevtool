@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use crate::types::IdeChoice;
 
+#[allow(clippy::too_many_arguments)]
 pub fn rebuild_vs_files(
     uproject: PathBuf,
     engine:   PathBuf,
@@ -12,6 +13,7 @@ pub fn rebuild_vs_files(
     status:   Arc<Mutex<String>>,
     cancel:   Arc<AtomicBool>,
     progress: Arc<Mutex<f32>>,
+    use_space_free_link: bool,
 ) -> String {
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
     macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
@@ -51,8 +53,27 @@ pub fn rebuild_vs_files(
     }
 
     // ── Step 2: generate ──────────────────────────────────────────────────────
-    let gpf_bat   = engine.join("Engine\\Build\\BatchFiles\\GenerateProjectFiles.bat");
-    let build_bat = engine.join("Engine\\Build\\BatchFiles\\Build.bat");
+    // Same UAT/UBT space-in-path bug as packaging (see ops::package): the
+    // engine's own batch scripts break on a space anywhere in the invoked
+    // path — most commonly the default "C:\Program Files\Epic Games\..."
+    // install. Route through the space-free alias here too when requested.
+    let (engine_for_cmd, project_dir_for_cmd) = if use_space_free_link {
+        let engine_alias = match crate::ops::preflight::ensure_space_free_alias(&engine) {
+            Ok(p)  => p,
+            Err(e) => return format!("[ERROR] Could not create space-free link for engine path: {e}"),
+        };
+        let project_alias = match crate::ops::preflight::ensure_space_free_alias(&project_dir) {
+            Ok(p)  => p,
+            Err(e) => return format!("[ERROR] Could not create space-free link for project path: {e}"),
+        };
+        (engine_alias, project_alias)
+    } else {
+        (engine.clone(), project_dir.clone())
+    };
+    let uproject_for_cmd = project_dir_for_cmd.join(uproject.file_name().unwrap_or_default());
+
+    let gpf_bat   = engine_for_cmd.join("Engine\\Build\\BatchFiles\\GenerateProjectFiles.bat");
+    let build_bat = engine_for_cmd.join("Engine\\Build\\BatchFiles\\Build.bat");
 
     check!();
     let log_path = project_dir.join("GenerateProjectFiles.log");
@@ -66,7 +87,7 @@ pub fn rebuild_vs_files(
     } else {
         return format!(
             "[ERROR] No generator bat found in:\n{}",
-            engine.join("Engine\\Build\\BatchFiles").display()
+            engine_for_cmd.join("Engine\\Build\\BatchFiles").display()
         );
     };
 
@@ -81,7 +102,7 @@ pub fn rebuild_vs_files(
 
     let mut gen_child = match crate::ops::cmd("cmd")
         .args(["/c", &bat_path.to_string_lossy()])
-        .arg(format!("-project={}", uproject.display()))
+        .arg(format!("-project={}", uproject_for_cmd.display()))
         .args(bat_args)
         .stdout(log_out)
         .stderr(log_err)

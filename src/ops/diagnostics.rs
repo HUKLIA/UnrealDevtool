@@ -68,19 +68,31 @@ pub struct Diagnosis {
     pub fix:         String,
 }
 
-/// Finds the most recently modified `BuildLog.txt` under `<project_dir>/build/`
-/// (each packaging run writes one under its own `build/vX.Y.Z/` folder).
+/// Finds the most recently modified log worth scanning: either a packaging
+/// run's `BuildLog.txt` (under `<project_dir>/build/vX.Y.Z/`) or a failed
+/// "Rebuild Visual Studio Files" run's `GenerateProjectFiles.log` (written
+/// straight to the project root, and only left behind on failure — a
+/// successful rebuild deletes its own log). Picks whichever is newest so
+/// the most recent failure — from either flow — is what gets diagnosed.
 pub fn latest_build_log(project_path: &Path) -> Option<PathBuf> {
-    let build_dir = project_path.parent()?.join("build");
+    let project_dir = project_path.parent()?;
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in fs::read_dir(&build_dir).ok()?.flatten() {
-        let log = entry.path().join("BuildLog.txt");
-        let Ok(meta) = fs::metadata(&log) else { continue };
-        let Ok(modified) = meta.modified() else { continue };
+
+    let mut consider = |log: PathBuf| {
+        let Ok(meta) = fs::metadata(&log) else { return };
+        let Ok(modified) = meta.modified() else { return };
         if best.as_ref().map_or(true, |(t, _)| modified > *t) {
             best = Some((modified, log));
         }
+    };
+
+    if let Ok(entries) = fs::read_dir(project_dir.join("build")) {
+        for entry in entries.flatten() {
+            consider(entry.path().join("BuildLog.txt"));
+        }
     }
+    consider(project_dir.join("GenerateProjectFiles.log"));
+
     best.map(|(_, p)| p)
 }
 

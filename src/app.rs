@@ -780,8 +780,9 @@ impl DevToolApp {
         let status_clone = Arc::clone(&self.status_message);
         let cancel       = Arc::clone(&self.cancel_flag);
         let progress     = Arc::clone(&self.progress);
+        let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Preparing to regenerate project files…", move || {
-            ops_vs::rebuild_vs_files(project_path, engine_dir, ide, status_clone, cancel, progress)
+            ops_vs::rebuild_vs_files(project_path, engine_dir, ide, status_clone, cancel, progress, use_space_free_link)
         });
     }
 

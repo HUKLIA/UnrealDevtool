@@ -53,6 +53,8 @@ impl DevToolApp {
                 });
                 ui.add_space(12.0);
 
+                self.show_space_warning_inline(ui);
+
                 ui.horizontal(|ui| {
                     if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Confirm & Rebuild")).clicked() {
                         do_start = true;
