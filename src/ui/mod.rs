@@ -510,7 +510,7 @@ impl DevToolApp {
             if ui.add_sized([link_w, 30.0], egui::Button::new("Claude")).clicked()  { crate::ops::open_url("https://claude.ai/new"); }
             if ui.add_sized([link_w, 30.0], egui::Button::new("ChatGPT")).clicked() { crate::ops::open_url("https://chatgpt.com/"); }
             if ui.add_sized([link_w, 30.0], egui::Button::new("Gemini")).clicked()  { crate::ops::open_url("https://gemini.google.com/app"); }
-            if ui.add_sized([link_w, 30.0], egui::Button::new("Kimi")).clicked()    { crate::ops::open_url("https://www.kimi.com/"); }
+            if ui.add_sized([link_w, 30.0], egui::Button::new("Epic Games")).clicked() { crate::ops::open_url("https://www.epicgames.com/"); }
         });
         ui.add_space(8.0);
         if ui.add_sized(w, egui::Button::new("📘  Unreal Docs")).clicked() {
