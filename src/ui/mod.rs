@@ -2,6 +2,7 @@ mod chat;
 mod git;
 mod package;
 mod preflight;
+mod selfcheck;
 mod vs;
 
 use eframe::egui;
@@ -396,6 +397,9 @@ impl DevToolApp {
         } else if self.show_chat_panel {
             self.show_chat_panel_ui(ui);
 
+        } else if self.show_app_check {
+            self.show_app_check_panel(ui);
+
         } else if !matches!(self.git_state, GitState::Idle) {
             let action = self.show_git_panel(ui);
             match action {
@@ -479,6 +483,10 @@ impl DevToolApp {
         ui.add_space(8.0);
         if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("💬  Dev Assistant")).clicked() {
             self.open_chat_panel();
+        }
+        ui.add_space(8.0);
+        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("⚙  App Self-Check")).clicked() {
+            self.open_app_check();
         }
 
         ui.add_space(12.0);

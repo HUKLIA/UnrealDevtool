@@ -67,6 +67,12 @@ pub struct DevToolApp {
     pub build_log_path:      Option<PathBuf>,
     pub build_log_diagnosis: Vec<crate::ops::diagnostics::Diagnosis>,
 
+    // App self-check (the DevTool's own install/config/update health, as
+    // opposed to Check PC Setup which is about the Unreal project/engine)
+    pub show_app_check:      bool,
+    pub app_check_items:     Vec<crate::ops::preflight::CheckItem>,
+    pub app_check_github:    Arc<Mutex<Option<crate::ops::preflight::CheckItem>>>,
+
     // Post-package upload panel
     pub pending_zip:        Arc<Mutex<Option<PathBuf>>>,
     pub show_upload_panel:  bool,
@@ -220,6 +226,9 @@ impl DevToolApp {
             pc_check_disk:        Arc::new(Mutex::new(None)),
             build_log_path:       None,
             build_log_diagnosis:  Vec::new(),
+            show_app_check:       false,
+            app_check_items:      Vec::new(),
+            app_check_github:     Arc::new(Mutex::new(None)),
             pending_zip:        Arc::new(Mutex::new(None)),
             show_upload_panel:  false,
             upload_zip_path:    PathBuf::new(),
@@ -353,11 +362,50 @@ impl DevToolApp {
         self.build_log_path      = Some(log);
     }
 
+    // ── App self-check ───────────────────────────────────────────────────────
+
+    pub fn open_app_check(&mut self) {
+        self.show_package_config = false;
+        self.show_vs_config      = false;
+        self.show_pc_check       = false;
+        self.show_chat_panel     = false;
+        self.git_state           = GitState::Idle;
+        self.show_app_check      = true;
+        self.refresh_app_check();
+    }
+
+    pub fn refresh_app_check(&mut self) {
+        self.app_check_items = crate::ops::selfcheck::run_checks();
+
+        *self.app_check_github.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let slot = Arc::clone(&self.app_check_github);
+        let ctx  = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let item = crate::ops::selfcheck::github_reachable();
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(item);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Manual fallback for the "Leftover update file" warning — automatic
+    /// cleanup (`ops::update::cleanup_old_binary`) already retries this on
+    /// every startup, but this lets the user clear it immediately without
+    /// restarting if it's still showing up.
+    pub fn cleanup_leftover_binary_now(&mut self) {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent() {
+                let _ = std::fs::remove_file(dir.join("unreal_devtool_old.exe"));
+            }
+        self.refresh_app_check();
+    }
+
     // ── PC / environment pre-flight ──────────────────────────────────────────
 
     pub fn open_pc_check(&mut self) {
         self.show_package_config = false;
         self.show_vs_config      = false;
+        self.show_chat_panel     = false;
+        self.show_app_check      = false;
         self.git_state            = GitState::Idle;
         self.show_pc_check       = true;
         self.refresh_pc_check();
@@ -918,6 +966,7 @@ impl DevToolApp {
         self.show_package_config = false;
         self.show_vs_config      = false;
         self.show_pc_check       = false;
+        self.show_app_check      = false;
         self.git_state           = GitState::Idle;
         self.show_chat_panel     = true;
         let have_any = !self.chat_providers.lock().unwrap_or_else(|e| e.into_inner()).is_empty();

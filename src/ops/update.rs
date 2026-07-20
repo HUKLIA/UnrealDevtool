@@ -97,7 +97,7 @@ fn retry_file_op<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Resu
 /// there can never self-update no matter how many times it retries, so this
 /// lets us fail fast with a clear, actionable message instead of a cryptic
 /// OS error after downloading the whole release.
-fn dir_is_writable(dir: &std::path::Path) -> bool {
+pub fn dir_is_writable(dir: &std::path::Path) -> bool {
     let probe = dir.join(".unreal_devtool_write_test");
     match std::fs::File::create(&probe) {
         Ok(_) => { let _ = std::fs::remove_file(&probe); true }
@@ -180,11 +180,32 @@ pub fn download_and_install(
     Ok(())
 }
 
-/// Delete a leftover `unreal_devtool_old.exe` from a previous update, if present.
-/// Safe to call on every startup.
+/// Deletes a leftover `unreal_devtool_old.exe` from a previous update, if
+/// present. Safe to call on every startup.
+///
+/// This runs right after an update relaunches into the new exe (see
+/// `download_and_install`) — at that point the *old* process only just
+/// called `spawn()` on us and hasn't necessarily hit `exit(0)` yet, so its
+/// file handle on `unreal_devtool_old.exe` can still be open for a brief
+/// moment. Deleting a still-running exe fails with the same sharing
+/// violation the rename/install steps guard against, so this needs the same
+/// retry — and since retrying means sleeping, it runs on a background
+/// thread so a slow-to-exit previous process can never delay startup.
 pub fn cleanup_old_binary() {
-    if let Ok(current_exe) = std::env::current_exe()
-        && let Some(dir) = current_exe.parent() {
-            let _ = std::fs::remove_file(dir.join("unreal_devtool_old.exe"));
-        }
+    let Ok(current_exe) = std::env::current_exe() else { return };
+    let Some(dir) = current_exe.parent() else { return };
+    let old_path = dir.join("unreal_devtool_old.exe");
+    if !old_path.exists() { return; }
+    std::thread::spawn(move || {
+        let _ = retry_file_op(|| std::fs::remove_file(&old_path));
+    });
+}
+
+/// Byte size of the leftover `unreal_devtool_old.exe`, if one exists —
+/// used by the app self-check to surface it if automatic cleanup ever fails.
+pub fn leftover_old_binary_size() -> Option<u64> {
+    let current_exe = std::env::current_exe().ok()?;
+    let dir = current_exe.parent()?;
+    let meta = std::fs::metadata(dir.join("unreal_devtool_old.exe")).ok()?;
+    Some(meta.len())
 }

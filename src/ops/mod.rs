@@ -5,6 +5,7 @@ pub mod git;
 pub mod llm;
 pub mod package;
 pub mod preflight;
+pub mod selfcheck;
 pub mod update;
 pub mod vs;
 

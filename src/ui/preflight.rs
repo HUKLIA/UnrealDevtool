@@ -46,7 +46,9 @@ impl DevToolApp {
         ui.add_space(8.0);
     }
 
-    fn show_check_item(ui: &mut egui::Ui, item: &CheckItem) {
+    /// Shared by `preflight` and `selfcheck` panels for consistent
+    /// [OK]/[WARN]/[FAIL] rendering of a `CheckItem`.
+    pub(crate) fn show_check_item(ui: &mut egui::Ui, item: &CheckItem) {
         let (prefix, color) = match item.status {
             CheckStatus::Ok   => ("[OK]",   accent()),
             CheckStatus::Warn => ("[WARN]", WARN_AMBER),
