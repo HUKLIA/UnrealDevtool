@@ -1,16 +1,19 @@
 use eframe::egui;
 use std::sync::Mutex;
 
-const MIKU_TEAL_DEFAULT: egui::Color32 = egui::Color32::from_rgb(57, 197, 187);
+// "Professional Polish" palette — near-black glass panels + teal accent,
+// matched to the unreal-devtool/ reference mockup (see its src/index.css).
+const MIKU_TEAL_DEFAULT: egui::Color32 = egui::Color32::from_rgb(0, 173, 181);
 
 pub const MIKU_PINK:  egui::Color32 = egui::Color32::from_rgb(225,  40, 133);
-pub const DARK_BG:    egui::Color32 = egui::Color32::from_rgb( 20,  20,  25);
-pub const PANEL_BG:   egui::Color32 = egui::Color32::from_rgb( 35,  35,  45);
-pub const GIF_BG:     egui::Color32 = egui::Color32::from_rgb( 12,  12,  18);
-pub const WARN_AMBER: egui::Color32 = egui::Color32::from_rgb(180, 140,  60);
-pub const ERR_RED:    egui::Color32 = egui::Color32::from_rgb(210,  80,  80);
-pub const HINT_GRAY:  egui::Color32 = egui::Color32::from_rgb(100, 100, 120);
-pub const PANEL_DARK: egui::Color32 = egui::Color32::from_rgb( 25,  25,  35);
+pub const DARK_BG:    egui::Color32 = egui::Color32::from_rgb(  8,   8,  10);
+pub const PANEL_BG:   egui::Color32 = egui::Color32::from_rgb( 24,  24,  28);
+pub const GIF_BG:     egui::Color32 = egui::Color32::from_rgb(  6,   6,   8);
+pub const WARN_AMBER: egui::Color32 = egui::Color32::from_rgb(217, 160,  40);
+pub const ERR_RED:    egui::Color32 = egui::Color32::from_rgb(220,  70,  90);
+pub const HINT_GRAY:  egui::Color32 = egui::Color32::from_rgb(130, 130, 145);
+pub const PANEL_DARK: egui::Color32 = egui::Color32::from_rgb( 14,  14,  17);
+pub const CARD_BORDER: egui::Color32 = egui::Color32::from_rgb( 34,  34,  34);
 
 /// Process-wide, user-customizable accent color. Replaces what used to be a
 /// `MIKU_TEAL` const — every former bare-const call site now calls `accent()`
@@ -41,18 +44,31 @@ pub fn set_accent(ctx: &egui::Context, color: egui::Color32) {
     apply_miku_theme(ctx);
 }
 
+/// "Glass card" frame matching the reference mockup's `.glass-card`: dark
+/// panel fill, subtle border, generous rounding. Used throughout the tabbed
+/// layout for visual consistency instead of every call site picking its own
+/// fill/stroke/rounding.
+pub fn card_frame() -> egui::Frame {
+    egui::Frame::none()
+        .fill(PANEL_DARK)
+        .stroke(egui::Stroke::new(1.0, CARD_BORDER))
+        .rounding(egui::Rounding::same(14.0))
+        .inner_margin(egui::Margin::same(14.0))
+}
+
 pub fn apply_miku_theme(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.window_fill = DARK_BG;
     v.panel_fill  = DARK_BG;
     v.widgets.inactive.bg_fill   = PANEL_BG;
-    v.widgets.inactive.rounding  = egui::Rounding::same(4.0);
+    v.widgets.inactive.rounding  = egui::Rounding::same(10.0);
     v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::LIGHT_GRAY);
+    v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, CARD_BORDER);
     v.widgets.hovered.bg_fill    = accent();
     v.widgets.hovered.fg_stroke  = egui::Stroke::new(1.5, egui::Color32::BLACK);
     v.widgets.active.bg_fill     = MIKU_PINK;
     v.widgets.active.fg_stroke   = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    v.widgets.active.rounding    = egui::Rounding::same(8.0);
+    v.widgets.active.rounding    = egui::Rounding::same(10.0);
     v.selection.bg_fill          = accent();
     v.selection.stroke           = egui::Stroke::new(1.0, accent());
     ctx.set_visuals(v);

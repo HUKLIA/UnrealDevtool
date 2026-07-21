@@ -7,20 +7,27 @@ A Windows desktop tool for Unreal Engine 5 developers: packages builds, regenera
 
 ---
 
-## What it does
+## UI
 
-| | |
+A brief animated boot-log splash (built from what was actually detected — your real project/engine/git state, not placeholder text) leads into the main window: a dark "glass panel" theme with a teal accent, organized into five tabs instead of one long scrolling button list. Tab content fades in on switch. The window centers itself on the monitor once at launch, and is otherwise completely free to move/resize — it never repositions itself again after that first frame.
+
+| Tab | Contents |
 |---|---|
-| **Rebuild VS Files** | Cleans generated folders, runs `GenerateProjectFiles.bat`, opens the result in Rider or Visual Studio |
-| **Package Game** | Runs UAT `BuildCookRun`, renames the output, zips it, and optionally uploads to Google Drive via rclone or copies to a local path. Name the package `TACHYON` (any case) and a one-time trailer video plays in place of the usual GIF for that run |
-| **Fast Package** | Same real UAT pipeline as Package Game — progress bar animates at high speed with per-stage sub-bars, GIF plays at 2× speed, and audio plays at 2× speed for the full fast-build feel |
-| **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), or merge current branch into main |
-| **Cookie Clicker** | Embedded Cookie Clicker ([orteil.dashnet.org](https://orteil.dashnet.org/cookieclicker/)) inside the app window with persistent save data across sessions |
-| **3D Miku / 2D Miku** | Toggle between the animated 2D Miku GIF and an embedded 3D Unity WebGL viewer with full mouse-look (pointer lock) support |
-| **Sponder Bird** | Embedded [Sponder Bird](https://nicktam1.github.io/SponderBirdNew/) game inside the app window |
-| **DM on Discord** | Automatically opens Discord on this PC, restores it from minimised/tray, searches for any username via Ctrl+K, and presses Enter to jump straight into the chat. Username is editable in-app |
-| **Customize Miku & Sound** | Swap the 2D GIF/image and looping sound for your own files, and pick a custom accent color for the whole app (persisted, with a one-click reset to the default teal) |
-| **Quick Links** | One-click buttons to open the Unreal Engine documentation assistant and Claude / ChatGPT / Gemini / Kimi in your default browser |
+| **Dashboard** | Project/engine path rows with **Browse…** overrides, **Rebuild VS Files**, and inline preflight diagnostics (engine/project validity, disk space, the space-in-path UAT bug, and a scan of the most recent build log against known UAT/UBT error signatures — plus a box to paste an arbitrary log excerpt to scan instead) |
+| **Package** | Package/exe name, version (auto-incremented or custom), the space-fix warning, and **Start Packaging** / **Fast Package**. Name the package `TACHYON` (any case) for a one-time trailer video in place of the usual GIF |
+| **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), merge current branch into main |
+| **Chat** | Dev Assistant — a chat panel wired to a local LLM. Auto-detects Ollama (`:11434`) and LM Studio (`:1234`), lets you pick server/model, and streams responses with your current engine/project/git/status injected as context |
+| **Extras** | Miku Visualizer (2D GIF / 3D WebGL toggle), Cookie Clicker & Sponder Bird, **App Self-Check** (the DevTool's own install/config/update health — separate from Dashboard's project/engine diagnostics), DM on Discord, and Customize (GIF/sound overrides, accent color — five presets or a full picker), plus Quick Links to Claude/ChatGPT/Gemini/Epic Games and the Unreal docs assistant |
+
+Engine detection reads `EngineAssociation` from the `.uproject` file to auto-find the exact matching engine via the registry. If auto-detection can't find it (non-standard install, source build, missing launcher registry keys), Browse… lets you point at the engine folder manually — the override persists and always wins over auto-detection until cleared.
+
+---
+
+## The space-in-path bug (and its fix)
+
+Unreal's own UAT/UBT batch scripts have a long-standing bug with spaces in paths — most commonly hit via the *default* Epic Games Launcher install location (`C:\Program Files\Epic Games\UE_5.x`), or a project folder with a space in its name. It shows up as a cryptic `'C:\Program' is not recognized as an internal or external command` failure, often after a long build.
+
+Check PC Setup (and the config panels for Package/Rebuild VS Files) detect this and offer a one-click **Fix automatically**: it creates an NTFS directory junction aliasing the affected folder(s) to a space-free path (`C:\UEDevToolLink\...` or `%ProgramData%\UEDevToolLink\...`) and routes UAT/UBT invocations through that instead. Nothing is moved or copied — the junction is just an alternate, space-free path to the same folder. Once applied, it's used for both packaging and VS Rebuild for the rest of the session.
 
 ---
 
@@ -44,6 +51,44 @@ No manual pull or push needed after clicking the button.
 ## Auto update check
 
 The app checks GitHub for a newer release on startup and then every 5 minutes while running. If a new version is found, a banner appears immediately. No restart needed to see the update prompt.
+
+Installing an update renames the running exe aside and drops the new one in its place (Windows allows renaming a running executable — it only blocks deleting one without `FILE_SHARE_DELETE`), then relaunches. Both that rename and the later cleanup of the old exe retry with backoff, since antivirus real-time scanning commonly grabs a freshly-written `.exe` for a moment right after it's closed. If the app is installed somewhere without write access (e.g. under `C:\Program Files\...` without admin rights), the update fails fast with a clear message instead of a cryptic OS error — App Self-Check surfaces this too.
+
+---
+
+## Project layout
+
+```
+src/
+  main.rs         entry point, window setup
+  app.rs          DevToolApp state + all non-UI action methods
+  ui/             egui panels (one module per feature area)
+    mod.rs          tab bar + routing, project/engine path rows, media/DM panels
+    intro.rs         boot-log splash screen
+    dashboard.rs      Dashboard tab (project/engine rows + inline diagnostics)
+    package.rs        Package tab config panel, upload panel, post-package prompts
+    vs.rs             VS-rebuild config panel (opened from the Dashboard tab)
+    git.rs            Git tab panels
+    chat.rs           Chat tab (Dev Assistant)
+    extras.rs         Extras tab + its Miku/Games sub-nav
+    preflight.rs      Check PC Setup content, space-fix warning box
+    selfcheck.rs      App Self-Check panel (an Extras sub-tab)
+  ops/            everything that isn't UI — file/process/network work
+    package.rs       UAT BuildCookRun, zip, upload
+    vs.rs            GenerateProjectFiles.bat / Build.bat
+    git.rs           git plumbing
+    preflight.rs      space-in-path fix, disk space, PC-setup checks
+    diagnostics.rs    known-error signature table, build-log scanner
+    llm.rs            Ollama / LM Studio client (provider detection, streaming chat)
+    selfcheck.rs      app-itself diagnostics
+    update.rs         GitHub release check, self-update, old-binary cleanup
+    discord.rs, ads.rs  DM-on-Discord, TACHYON ad
+  engine.rs       Unreal Engine detection (registry / EngineAssociation)
+  config.rs       all persisted settings (%APPDATA%\UnrealDevTool)
+  types.rs        shared enums (GitState, IdeChoice, ...)
+  theme.rs        colors, accent color persistence
+  audio.rs, gif.rs, webview.rs   media playback, embedded WebView2 panels
+```
 
 ---
 
@@ -90,6 +135,7 @@ If an upload fails (expired auth, no permission on the destination, network bloc
 
 - Windows 10/11
 - [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (pre-installed on Windows 11; free download for Windows 10) — required for Cookie Clicker, 3D Miku, and Sponder Bird embedded panels
+- [Ollama](https://ollama.com/) and/or [LM Studio](https://lmstudio.ai/) — optional, only needed for the Dev Assistant chat panel. Neither is bundled; the app just looks for one running locally
 
 ---
 
@@ -97,7 +143,7 @@ If an upload fails (expired auth, no permission on the destination, network bloc
 
 - Config and build names are saved to `%APPDATA%\UnrealDevTool\`
 - WebView2 persistent data (Cookie Clicker save, etc.) stored in `%APPDATA%\UnrealDevTool\webview2\`
-- Engine detection reads `EngineAssociation` from the `.uproject` file to find the exact matching engine version
+- Engine detection reads `EngineAssociation` from the `.uproject` file to find the exact matching engine version; a manually-picked engine folder (via Browse…) persists across restarts and always wins over auto-detection until cleared
 - Force push to main is intentionally not implemented
 - The exe is fully portable — no installer or runtime needed (WebView2 aside)
 - The exe bundles rclone.exe and the TACHYON trailer video, so it's a large download (~150 MB) — everything still runs from the single file with no separate assets to manage

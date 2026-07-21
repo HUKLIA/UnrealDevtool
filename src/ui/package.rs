@@ -288,7 +288,7 @@ impl DevToolApp {
                         }
                     });
                     if ui.add_sized([90.0, 32.0], egui::Button::new("x  Cancel")).clicked() {
-                        self.show_package_config = false;
+                        self.switch_tab(crate::types::AppTab::Dashboard);
                     }
                 });
             });

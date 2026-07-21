@@ -94,45 +94,34 @@ impl DevToolApp {
         ui.add_space(8.0);
     }
 
-    pub fn show_pc_check_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("🔍  Check PC Setup").size(13.0).color(accent()));
-                ui.add_space(10.0);
+    /// Preflight diagnostics content — engine/project checks, disk space,
+    /// space-fix warning, and the on-disk build-log diagnosis. Pure content,
+    /// no outer frame/heading: this is Dashboard-tab content now (always
+    /// visible, not a togglable overlay), so the caller supplies framing.
+    pub fn show_pc_check_content(&mut self, ui: &mut egui::Ui) {
+        for item in &self.pc_check_items {
+            Self::show_check_item(ui, item);
+        }
 
-                for item in &self.pc_check_items {
-                    Self::show_check_item(ui, item);
+        // Disk space runs on a background thread (it shells out to
+        // PowerShell) — show a pending state until it reports back.
+        if self.project_path.as_ref().and_then(|p| p.parent()).is_some() {
+            match &*self.pc_check_disk.lock().unwrap_or_else(|e| e.into_inner()) {
+                Some(item) => Self::show_check_item(ui, item),
+                None => {
+                    ui.colored_label(HINT_GRAY, "[..]  Disk space");
+                    ui.label(egui::RichText::new("Checking…").size(10.5).color(HINT_GRAY));
+                    ui.add_space(6.0);
+                    ui.ctx().request_repaint();
                 }
+            }
+        }
 
-                // Disk space runs on a background thread (it shells out to
-                // PowerShell) — show a pending state until it reports back.
-                if self.project_path.as_ref().and_then(|p| p.parent()).is_some() {
-                    match &*self.pc_check_disk.lock().unwrap_or_else(|e| e.into_inner()) {
-                        Some(item) => Self::show_check_item(ui, item),
-                        None => {
-                            ui.colored_label(HINT_GRAY, "[..]  Disk space");
-                            ui.label(egui::RichText::new("Checking…").size(10.5).color(HINT_GRAY));
-                            ui.add_space(6.0);
-                            ui.ctx().request_repaint();
-                        }
-                    }
-                }
+        self.show_space_warning_inline(ui);
+        self.show_build_log_diagnosis(ui);
 
-                self.show_space_warning_inline(ui);
-                self.show_build_log_diagnosis(ui);
-
-                ui.horizontal(|ui| {
-                    if ui.add_sized([100.0, 28.0], egui::Button::new("↻  Refresh")).clicked() {
-                        self.refresh_pc_check();
-                    }
-                    if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                        self.show_pc_check = false;
-                    }
-                });
-            });
+        if ui.add_sized([100.0, 28.0], egui::Button::new("↻  Refresh")).clicked() {
+            self.refresh_pc_check();
+        }
     }
 }

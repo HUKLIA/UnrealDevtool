@@ -24,7 +24,7 @@ impl DevToolApp {
                     ui.label(egui::RichText::new("💬  Dev Assistant").size(13.0).color(accent()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_sized([70.0, 24.0], egui::Button::new("< Back")).clicked() {
-                            self.show_chat_panel = false;
+                            self.switch_tab(crate::types::AppTab::Dashboard);
                         }
                     });
                 });

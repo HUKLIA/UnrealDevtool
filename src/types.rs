@@ -6,6 +6,27 @@ pub enum IdeChoice {
     SkipOpen,
 }
 
+/// Top-level tab. Drives the main tab bar and which tab's content
+/// `show_idle_view` routes to.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppTab {
+    Dashboard,
+    Package,
+    Git,
+    Chat,
+    Extras,
+}
+
+/// Sub-navigation within the Extras tab.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ExtrasTab {
+    Miku,
+    Games,
+    SelfCheck,
+    Discord,
+    Customize,
+}
+
 /// Every step in the git flow. Stored in [`crate::app::DevToolApp`]; drives which panel shows.
 #[derive(Clone, PartialEq)]
 pub enum GitState {

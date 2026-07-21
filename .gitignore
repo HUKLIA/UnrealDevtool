@@ -23,3 +23,7 @@ tokencache.json
 
 # RustRover / IntelliJ
 #.idea/
+
+# React/Vite UI reference mockup (AI Studio scaffold) — design reference only,
+# not part of the Rust app build
+unreal-devtool/

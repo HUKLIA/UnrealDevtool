@@ -51,7 +51,7 @@ impl DevToolApp {
                         self.refresh_app_check();
                     }
                     if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                        self.show_app_check = false;
+                        self.extras_tab = crate::types::ExtrasTab::Miku;
                     }
                 });
             });

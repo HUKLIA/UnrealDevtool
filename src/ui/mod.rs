@@ -1,5 +1,8 @@
 mod chat;
+mod dashboard;
+mod extras;
 mod git;
+mod intro;
 mod package;
 mod preflight;
 mod selfcheck;
@@ -9,7 +12,7 @@ use eframe::egui;
 use crate::app::DevToolApp;
 use crate::config::{clear_project_path, save_project_path, save_ui_config, UiConfig};
 use crate::theme::*;
-use crate::types::{GitAction, GitState, GitTaskStatus, UploadAction};
+use crate::types::{AppTab, GitAction, GitState, GitTaskStatus, UploadAction};
 use std::sync::atomic::Ordering;
 
 // ── eframe::App — the main update loop ───────────────────────────────────────
@@ -27,6 +30,13 @@ const AD_SAFETY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.center_window_on_startup(ctx);
+
+        if self.show_intro {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                self.show_intro_screen(ui, ctx);
+            });
+            return;
+        }
 
         // `unwrap_or_else(|e| e.into_inner())` recovers from a poisoned lock
         // instead of panicking. Without this, a panic on any background
@@ -356,67 +366,119 @@ impl DevToolApp {
             self.start_update_install(download_url);
         }
 
-        self.show_project_path_row(ui);
-        ui.add_space(10.0);
-        self.show_engine_path_row(ui);
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(10.0);
-
+        // Global overlays: transient post-action flows that take priority
+        // over normal tab content no matter which tab is active.
         if let Some(panel) = self.active_web_panel {
             self.show_web_panel_ui(ui, panel);
-
-        } else if self.show_open_folder_panel {
+            return;
+        }
+        if self.show_open_folder_panel {
             self.show_open_folder_panel(ui);
-
-        } else if self.show_upload_fallback_panel {
+            return;
+        }
+        if self.show_upload_fallback_panel {
             self.show_upload_fallback_panel(ui);
-
-        } else if self.show_upload_panel {
+            return;
+        }
+        if self.show_upload_panel {
             let action = self.show_upload_panel_ui(ui);
             match action {
                 UploadAction::Upload => self.start_upload(),
                 UploadAction::Skip   => { self.show_upload_panel = false; }
                 UploadAction::None   => {}
             }
+            return;
+        }
 
-        } else if self.show_package_config {
-            match self.show_package_config_panel(ui) {
-                Some(false) => self.start_packaging(),
-                Some(true)  => self.start_fast_packaging(),
-                None        => {}
+        self.show_tab_bar(ui);
+        ui.add_space(12.0);
+
+        // Fade the newly-selected tab's content in. `animate_bool` keys its
+        // state by `Id`, and this id is unique per tab — so every time
+        // `active_tab` changes, it's a *fresh* id starting at 0.0 and
+        // animating up to 1.0, giving a fade-in with no extra state to track.
+        let fade_id = egui::Id::new("active_tab_fade").with(self.active_tab);
+        let alpha   = ui.ctx().animate_bool(fade_id, true);
+        ui.scope(|ui| {
+            ui.multiply_opacity(alpha);
+            match self.active_tab {
+                AppTab::Dashboard => self.show_dashboard_tab(ui),
+                AppTab::Package   => self.show_package_tab(ui),
+                AppTab::Git       => self.show_git_tab(ui),
+                AppTab::Chat      => self.show_chat_panel_ui(ui),
+                AppTab::Extras    => self.show_extras_tab(ui),
             }
+        });
+        if alpha < 1.0 { ui.ctx().request_repaint(); }
+    }
 
-        } else if self.show_vs_config {
-            let go = self.show_vs_config_panel(ui);
-            if go { self.start_vs_rebuild(); }
+    /// Top tab bar: Dashboard / Package / Git / Chat / Extras.
+    pub fn show_tab_bar(&mut self, ui: &mut egui::Ui) {
+        let tabs: &[(AppTab, &str)] = &[
+            (AppTab::Dashboard, "🖥 Dashboard"),
+            (AppTab::Package,   "📦 Package"),
+            (AppTab::Git,       "🐙 Git"),
+            (AppTab::Chat,      "💬 Chat"),
+            (AppTab::Extras,    "✨ Extras"),
+        ];
+        card_frame().inner_margin(egui::Margin::symmetric(4.0, 4.0)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let gap    = ui.spacing().item_spacing.x;
+                let tab_w  = (ui.available_width() - gap * (tabs.len() as f32 - 1.0)) / tabs.len() as f32;
+                for (tab, label) in tabs {
+                    let selected = self.active_tab == *tab;
+                    let btn = egui::Button::new(
+                        egui::RichText::new(*label).size(10.5)
+                            .color(if selected { egui::Color32::WHITE } else { HINT_GRAY }),
+                    )
+                    .fill(if selected { PANEL_BG } else { egui::Color32::TRANSPARENT })
+                    .stroke(if selected { egui::Stroke::new(1.0, accent()) } else { egui::Stroke::NONE });
+                    if ui.add_sized([tab_w, 28.0], btn).clicked() && !selected {
+                        self.switch_tab(*tab);
+                    }
+                }
+            });
+        });
+    }
 
-        } else if self.show_pc_check {
-            self.show_pc_check_panel(ui);
+    /// Package tab: the config form is always shown (no separate "open"
+    /// click needed now that it's tab content, not a togglable overlay).
+    fn show_package_tab(&mut self, ui: &mut egui::Ui) {
+        if self.project_path.is_none() {
+            ui.colored_label(WARN_AMBER, "(!)  Set a project path on the Dashboard tab first.");
+            return;
+        }
+        match self.show_package_config_panel(ui) {
+            Some(false) => self.start_packaging(),
+            Some(true)  => self.start_fast_packaging(),
+            None        => {}
+        }
+    }
 
-        } else if self.show_chat_panel {
-            self.show_chat_panel_ui(ui);
-
-        } else if self.show_app_check {
-            self.show_app_check_panel(ui);
-
-        } else if !matches!(self.git_state, GitState::Idle) {
-            let action = self.show_git_panel(ui);
-            match action {
-                GitAction::StartCommitPush          => self.git_start_commit_push(),
-                GitAction::StartSync                => self.git_start_sync(),
-                GitAction::StartMerge               => self.git_start_merge(),
-                GitAction::StartMergeAndPackage     => self.start_merge_and_package(),
-                GitAction::StartCheckout { branch } => self.git_start_checkout(branch),
-                GitAction::StartNewBranch { name }  => self.git_start_new_branch(name),
-                GitAction::None                     => {}
-            }
-        } else if self.show_dm_spencer_panel {
-            self.show_dm_spencer_panel(ui);
-        } else if self.show_media_config {
-            self.show_media_config_panel(ui);
-        } else {
-            self.show_action_buttons(ui);
+    /// Git tab: the menu is always shown once a project is set (`switch_tab`
+    /// initializes `git_state` to `Menu` the first time this tab is opened).
+    fn show_git_tab(&mut self, ui: &mut egui::Ui) {
+        if self.git_project_dir().is_none() {
+            ui.colored_label(WARN_AMBER, "(!)  Set a project path on the Dashboard tab first.");
+            return;
+        }
+        // Several git flows (e.g. Sync with main) land back on `Idle` when
+        // they finish, which `show_git_panel` renders as nothing — that was
+        // fine when Idle meant "fall through to the button list", but this
+        // is now always-visible tab content, so re-open the menu instead of
+        // showing a blank tab.
+        if matches!(self.git_state, GitState::Idle) {
+            self.open_git_menu();
+        }
+        let action = self.show_git_panel(ui);
+        match action {
+            GitAction::StartCommitPush          => self.git_start_commit_push(),
+            GitAction::StartSync                => self.git_start_sync(),
+            GitAction::StartMerge               => self.git_start_merge(),
+            GitAction::StartMergeAndPackage     => self.start_merge_and_package(),
+            GitAction::StartCheckout { branch } => self.git_start_checkout(branch),
+            GitAction::StartNewBranch { name }  => self.git_start_new_branch(name),
+            GitAction::None                     => {}
         }
     }
 
@@ -453,77 +515,6 @@ impl DevToolApp {
         ui.add_space(8.0);
 
         if clicked_update { Some(info.download_url) } else { None }
-    }
-
-    pub fn show_action_buttons(&mut self, ui: &mut egui::Ui) {
-        let have_project = self.project_path.is_some();
-        ui.add_enabled_ui(have_project, |ui| {
-            let w = [ui.available_width(), 40.0];
-            if ui.add_sized(w, egui::Button::new("🔧  Rebuild Visual Studio Files")).clicked() {
-                self.open_vs_config();
-            }
-            ui.add_space(8.0);
-            if ui.add_sized(w, egui::Button::new("📦  Build and Package Game")).clicked() {
-                self.open_package_config();
-            }
-            ui.add_space(8.0);
-            if ui.add_sized(w, egui::Button::new("🐙  Git")).clicked() {
-                self.open_git_menu();
-            }
-        });
-        if !have_project {
-            ui.add_space(6.0);
-            ui.colored_label(WARN_AMBER, "(!)  Set a project path above to enable these actions.");
-        }
-
-        ui.add_space(8.0);
-        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("🔍  Check PC Setup")).clicked() {
-            self.open_pc_check();
-        }
-        ui.add_space(8.0);
-        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("💬  Dev Assistant")).clicked() {
-            self.open_chat_panel();
-        }
-        ui.add_space(8.0);
-        if ui.add_sized([ui.available_width(), 32.0], egui::Button::new("⚙  App Self-Check")).clicked() {
-            self.open_app_check();
-        }
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        let w = [ui.available_width(), 40.0];
-        if ui.add_sized(w, egui::Button::new("🍪  Cookie Clicker")).clicked() {
-            self.active_web_panel = Some(crate::webview::WebPanel::CookieClicker);
-        }
-        ui.add_space(8.0);
-        if ui.add_sized(w, egui::Button::new("💬  DM Spencer")).clicked() {
-            self.show_dm_spencer_panel = true;
-        }
-        ui.add_space(8.0);
-        if ui.add_sized(w, egui::Button::new("🎨  Customize Miku & Sound")).clicked() {
-            self.open_media_config();
-        }
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new("Quick Links").size(11.0).color(HINT_GRAY));
-        ui.add_space(6.0);
-
-        let gap    = ui.spacing().item_spacing.x;
-        let link_w = (ui.available_width() - gap * 3.0) / 4.0;
-        ui.horizontal(|ui| {
-            if ui.add_sized([link_w, 30.0], egui::Button::new("Claude")).clicked()  { crate::ops::open_url("https://claude.ai/new"); }
-            if ui.add_sized([link_w, 30.0], egui::Button::new("ChatGPT")).clicked() { crate::ops::open_url("https://chatgpt.com/"); }
-            if ui.add_sized([link_w, 30.0], egui::Button::new("Gemini")).clicked()  { crate::ops::open_url("https://gemini.google.com/app"); }
-            if ui.add_sized([link_w, 30.0], egui::Button::new("Epic Games")).clicked() { crate::ops::open_url("https://www.epicgames.com/"); }
-        });
-        ui.add_space(8.0);
-        if ui.add_sized(w, egui::Button::new("📘  Unreal Docs")).clicked() {
-            crate::ops::open_url("https://dev.epicgames.com/community/assistant/unreal-engine");
-        }
     }
 
     pub fn show_media_config_panel(&mut self, ui: &mut egui::Ui) {
@@ -616,6 +607,28 @@ impl DevToolApp {
 
                 ui.label(egui::RichText::new("Accent Color").size(11.0).color(egui::Color32::GRAY));
                 ui.add_space(4.0);
+
+                const PRESETS: &[(&str, egui::Color32)] = &[
+                    ("Miku Teal",    egui::Color32::from_rgb(0, 173, 181)),
+                    ("Sakura Pink",  egui::Color32::from_rgb(236, 72, 153)),
+                    ("Hyper Purple", egui::Color32::from_rgb(168, 85, 247)),
+                    ("Cyber Orange", egui::Color32::from_rgb(249, 115, 22)),
+                    ("Tachyon Yellow", egui::Color32::from_rgb(234, 179, 8)),
+                ];
+                ui.horizontal(|ui| {
+                    for (name, color) in PRESETS {
+                        let selected = accent() == *color;
+                        let btn = egui::Button::new(if selected { "✓" } else { "" })
+                            .fill(*color)
+                            .min_size(egui::vec2(26.0, 22.0));
+                        if ui.add(btn).on_hover_text(*name).clicked() {
+                            crate::theme::set_accent(ui.ctx(), *color);
+                            save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())) });
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+
                 ui.horizontal(|ui| {
                     let mut color = accent();
                     if ui.color_edit_button_srgba(&mut color).changed() {
@@ -631,7 +644,7 @@ impl DevToolApp {
 
                 ui.add_space(14.0);
                 if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                    self.show_media_config = false;
+                    self.extras_tab = crate::types::ExtrasTab::Miku;
                 }
             });
     }
@@ -752,7 +765,7 @@ impl DevToolApp {
 
         ui.horizontal(|ui| {
             if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                self.show_dm_spencer_panel = false;
+                self.extras_tab = crate::types::ExtrasTab::Miku;
             }
             ui.add_space(8.0);
             if ui.add_sized([160.0, 28.0], egui::Button::new("🐦  Play Sponder Bird")).clicked() {

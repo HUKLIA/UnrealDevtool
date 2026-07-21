@@ -17,7 +17,7 @@ use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, update as ops_update, vs as ops_vs};
 use crate::ops::update::UpdateInfo;
 use crate::theme::apply_miku_theme;
-use crate::types::{GitState, GitTaskStatus, IdeChoice};
+use crate::types::{AppTab, ExtrasTab, GitState, GitTaskStatus, IdeChoice};
 use crate::webview::{WebPanel, WebViewManager};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -44,7 +44,6 @@ pub struct DevToolApp {
     pub progress:             Arc<Mutex<f32>>,
 
     // Package pre-flight
-    pub show_package_config:        bool,
     pub pack_name_input:            String,
     pub exe_name_input:             String,
     pub next_version_preview:       u32,
@@ -59,7 +58,6 @@ pub struct DevToolApp {
 
     // PC / environment pre-flight checks (engine & project path validity,
     // space-in-path UAT workaround, disk space)
-    pub show_pc_check:       bool,
     pub use_space_free_link: bool,
     pub pc_check_items:      Vec<crate::ops::preflight::CheckItem>,
     /// `None` while the background disk-space check is still running.
@@ -69,7 +67,6 @@ pub struct DevToolApp {
 
     // App self-check (the DevTool's own install/config/update health, as
     // opposed to Check PC Setup which is about the Unreal project/engine)
-    pub show_app_check:      bool,
     pub app_check_items:     Vec<crate::ops::preflight::CheckItem>,
     pub app_check_github:    Arc<Mutex<Option<crate::ops::preflight::CheckItem>>>,
 
@@ -100,7 +97,6 @@ pub struct DevToolApp {
     pub pending_open_folder_path:  std::path::PathBuf,
 
     // Extras
-    pub show_dm_spencer_panel: bool,
     pub dm_target_name:        String,
     pub dm_message_presets:    Vec<String>,
     pub dm_custom_message:     String,
@@ -129,12 +125,10 @@ pub struct DevToolApp {
     pub ad_started_at: Option<Instant>,
 
     // Custom media (2D image/GIF + looping sound)
-    pub show_media_config: bool,
     pub custom_gif_path:   Option<PathBuf>,
     pub custom_sound_path: Option<PathBuf>,
 
     // Dev-assistant chat (local LLM via Ollama / LM Studio)
-    pub show_chat_panel: bool,
     pub chat_history:    Vec<crate::ops::llm::ChatMessage>,
     pub chat_input:      String,
     pub chat_providers:  Arc<Mutex<Vec<(crate::ops::llm::LlmProvider, Vec<String>)>>>,
@@ -157,6 +151,23 @@ pub struct DevToolApp {
     /// every resize/move fought the user's own drags (window would snap
     /// back to center and flicker), so this only runs once, at startup.
     pub has_centered_window: bool,
+
+    // Tabbed main layout
+    pub active_tab: AppTab,
+    pub extras_tab: ExtrasTab,
+
+    // Boot/intro splash screen — shown once at launch, before the main UI.
+    pub show_intro:       bool,
+    pub intro_started_at: Option<Instant>,
+    pub intro_log:        Vec<String>,
+    pub intro_revealed:   usize,
+    pub intro_done:       bool,
+
+    // Dashboard tab: paste-a-log-segment fallback alongside the
+    // auto-scanned-from-disk build log (mirrors the reference mockup, which
+    // only supports paste — auto-scan-from-disk is our own addition on top).
+    pub pasted_log_input:      String,
+    pub pasted_log_diagnosis:  Vec<crate::ops::diagnostics::Diagnosis>,
 }
 
 impl DevToolApp {
@@ -210,7 +221,6 @@ impl DevToolApp {
             busy_label:  String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             progress:    Arc::new(Mutex::new(0.0_f32)),
-            show_package_config:         false,
             pack_name_input:             String::new(),
             exe_name_input:              String::new(),
             next_version_preview:        1,
@@ -220,13 +230,11 @@ impl DevToolApp {
             close_editor_before_package: true,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
-            show_pc_check:        false,
             use_space_free_link:  false,
             pc_check_items:       Vec::new(),
             pc_check_disk:        Arc::new(Mutex::new(None)),
             build_log_path:       None,
             build_log_diagnosis:  Vec::new(),
-            show_app_check:       false,
             app_check_items:      Vec::new(),
             app_check_github:     Arc::new(Mutex::new(None)),
             pending_zip:        Arc::new(Mutex::new(None)),
@@ -249,7 +257,6 @@ impl DevToolApp {
             git_package_after_merge: false,
             show_open_folder_panel:    false,
             pending_open_folder_path:  std::path::PathBuf::new(),
-            show_dm_spencer_panel:     false,
             dm_target_name:            "gonkindroid".to_string(),
             dm_message_presets:        vec!["Hey!".to_string(),
                                         "You up?".to_string(),
@@ -267,10 +274,8 @@ impl DevToolApp {
             task_started_at:    None,
             ad_playing:         false,
             ad_started_at:      None,
-            show_media_config:  false,
             custom_gif_path,
             custom_sound_path,
-            show_chat_panel: false,
             chat_history:    Vec::new(),
             chat_input:      String::new(),
             chat_providers:  Arc::new(Mutex::new(Vec::new())),
@@ -283,10 +288,68 @@ impl DevToolApp {
             chat_cancel:     Arc::new(AtomicBool::new(false)),
             egui_ctx: cc.egui_ctx.clone(),
             has_centered_window: false,
+            active_tab: AppTab::Dashboard,
+            extras_tab: ExtrasTab::Miku,
+            show_intro:       true,
+            intro_started_at: None,
+            intro_log:        Vec::new(),
+            intro_revealed:   0,
+            intro_done:       false,
+            pasted_log_input:     String::new(),
+            pasted_log_diagnosis: Vec::new(),
         };
+        app.intro_log = app.build_intro_log();
         ops_update::cleanup_old_binary();
         app.check_for_updates(cc.egui_ctx.clone());
         app
+    }
+
+    /// Boot-log lines for the intro splash — built from what was actually
+    /// detected at startup (not placeholder text), so the "boot sequence"
+    /// reflects your real project/engine/git state.
+    fn build_intro_log(&self) -> Vec<String> {
+        let mut log = vec!["Initializing Unreal DevTool...".to_string()];
+
+        match &self.project_path {
+            Some(p) => log.push(format!(
+                "Found project: '{}'",
+                p.file_name().unwrap_or_default().to_string_lossy()
+            )),
+            None => log.push("No project set yet — pick one from the Dashboard.".to_string()),
+        }
+
+        match &self.engine_dir {
+            Some(e) => {
+                log.push(format!("Engine located: {}", e.display()));
+                if crate::ops::preflight::has_space(e) {
+                    log.push("WARNING: space detected in engine path — space-free fix available.".to_string());
+                }
+            }
+            None => log.push("WARNING: engine not auto-detected — set it manually from the Dashboard.".to_string()),
+        }
+
+        log.push("Checking local disk space...".to_string());
+        log.push("Ready for Dev Assistant — checking for Ollama / LM Studio...".to_string());
+        log.push("Unreal DevTool loaded successfully. Welcome back.".to_string());
+        log
+    }
+
+    /// Advances the intro's line-by-line reveal. Called every frame while
+    /// `show_intro` is true; paces itself off wall-clock time rather than
+    /// frame count so it's consistent regardless of frame rate.
+    pub fn tick_intro(&mut self, ctx: &egui::Context) {
+        let started = *self.intro_started_at.get_or_insert_with(Instant::now);
+        const LINE_INTERVAL_MS: u128 = 220;
+        let elapsed_ms = started.elapsed().as_millis();
+        let target = ((elapsed_ms / LINE_INTERVAL_MS) as usize + 1).min(self.intro_log.len());
+        if target > self.intro_revealed {
+            self.intro_revealed = target;
+        }
+        if self.intro_revealed >= self.intro_log.len() {
+            self.intro_done = true;
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(40));
+        }
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
@@ -364,16 +427,6 @@ impl DevToolApp {
 
     // ── App self-check ───────────────────────────────────────────────────────
 
-    pub fn open_app_check(&mut self) {
-        self.show_package_config = false;
-        self.show_vs_config      = false;
-        self.show_pc_check       = false;
-        self.show_chat_panel     = false;
-        self.git_state           = GitState::Idle;
-        self.show_app_check      = true;
-        self.refresh_app_check();
-    }
-
     pub fn refresh_app_check(&mut self) {
         self.app_check_items = crate::ops::selfcheck::run_checks();
 
@@ -399,17 +452,28 @@ impl DevToolApp {
         self.refresh_app_check();
     }
 
-    // ── PC / environment pre-flight ──────────────────────────────────────────
-
-    pub fn open_pc_check(&mut self) {
-        self.show_package_config = false;
-        self.show_vs_config      = false;
-        self.show_chat_panel     = false;
-        self.show_app_check      = false;
-        self.git_state            = GitState::Idle;
-        self.show_pc_check       = true;
-        self.refresh_pc_check();
+    /// Switches the active tab, running whatever one-time setup that tab's
+    /// content needs (mirrors what the old button-triggered `open_*` methods
+    /// did before there were tabs to switch between instead).
+    pub fn switch_tab(&mut self, tab: AppTab) {
+        self.active_tab = tab;
+        match tab {
+            AppTab::Dashboard => self.refresh_pc_check(),
+            AppTab::Package   => self.open_package_config(),
+            AppTab::Git       => { if matches!(self.git_state, GitState::Idle) { self.open_git_menu(); } }
+            AppTab::Chat      => self.open_chat_panel(),
+            AppTab::Extras    => {}
+        }
     }
+
+    /// Scans a pasted log excerpt (Dashboard tab) against the same known-error
+    /// table as the on-disk build-log scanner — for when the relevant log
+    /// isn't the most recent one on disk, or came from somewhere else.
+    pub fn scan_pasted_log(&mut self) {
+        self.pasted_log_diagnosis = crate::ops::diagnostics::scan_build_log_text(&self.pasted_log_input);
+    }
+
+    // ── PC / environment pre-flight ──────────────────────────────────────────
 
     pub fn refresh_pc_check(&mut self) {
         self.pc_check_items = crate::ops::preflight::run_checks(&self.engine_dir, &self.project_path);
@@ -540,13 +604,6 @@ impl DevToolApp {
 
     // ── Custom media (2D image/GIF + looping sound) ───────────────────────────
 
-    pub fn open_media_config(&mut self) {
-        self.show_package_config = false;
-        self.show_vs_config      = false;
-        self.git_state            = GitState::Idle;
-        self.show_media_config   = true;
-    }
-
     fn current_media_config(&self) -> MediaConfig {
         MediaConfig {
             gif_path:   self.custom_gif_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
@@ -645,7 +702,6 @@ impl DevToolApp {
         // Snapshot whether the editor is running right now so the config panel
         // can show the appropriate warning without calling tasklist every frame.
         self.editor_is_running = ops_package::is_editor_running();
-        self.show_package_config = true;
         self.show_vs_config      = false;
         self.git_state           = GitState::Idle;
     }
@@ -656,7 +712,6 @@ impl DevToolApp {
             Some(e) => e,
             None    => {
                 self.set_status("[ERROR] Engine not found.".into());
-                self.show_package_config = false;
                 return;
             }
         };
@@ -676,7 +731,6 @@ impl DevToolApp {
             return;
         }
         save_project_config(&project_path, &pack_name, &exe_name);
-        self.show_package_config = false;
         self.fast_package_mode  = false;
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
@@ -708,7 +762,6 @@ impl DevToolApp {
             Some(e) => e,
             None    => {
                 self.set_status("[ERROR] Engine not found.".into());
-                self.show_package_config = false;
                 return;
             }
         };
@@ -728,7 +781,6 @@ impl DevToolApp {
             return;
         }
         save_project_config(&project_path, &pack_name, &exe_name);
-        self.show_package_config = false;
         self.fast_package_mode  = true;
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
@@ -807,7 +859,6 @@ impl DevToolApp {
 
     pub fn open_vs_config(&mut self) {
         self.show_vs_config      = true;
-        self.show_package_config = false;
         self.git_state           = GitState::Idle;
     }
 
@@ -837,7 +888,6 @@ impl DevToolApp {
     // ── Git actions ───────────────────────────────────────────────────────────
 
     pub fn open_git_menu(&mut self) {
-        self.show_package_config = false;
         self.show_vs_config      = false;
         self.git_commit_msg.clear();
         self.git_new_branch_name.clear();
@@ -963,12 +1013,7 @@ impl DevToolApp {
     // ── Dev-assistant chat (local LLM) ───────────────────────────────────────
 
     pub fn open_chat_panel(&mut self) {
-        self.show_package_config = false;
-        self.show_vs_config      = false;
-        self.show_pc_check       = false;
-        self.show_app_check      = false;
-        self.git_state           = GitState::Idle;
-        self.show_chat_panel     = true;
+        self.show_vs_config = false;
         let have_any = !self.chat_providers.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
         if !have_any { self.detect_chat_providers(); }
     }

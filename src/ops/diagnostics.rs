@@ -100,6 +100,13 @@ pub fn latest_build_log(project_path: &Path) -> Option<PathBuf> {
 /// search — fast enough to call directly on the UI thread.
 pub fn scan_build_log(log_path: &Path) -> Vec<Diagnosis> {
     let Ok(content) = fs::read_to_string(log_path) else { return Vec::new() };
+    scan_build_log_text(&content)
+}
+
+/// Same scan as [`scan_build_log`], but against an arbitrary string instead
+/// of a file on disk — for a pasted log excerpt from somewhere other than
+/// the most recent build (a teammate's log, an older run, etc.).
+pub fn scan_build_log_text(content: &str) -> Vec<Diagnosis> {
     KNOWN_ERRORS.iter()
         .filter_map(|sig| {
             content.lines().find(|l| l.contains(sig.pattern)).map(|line| Diagnosis {
