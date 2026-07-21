@@ -17,12 +17,14 @@ use eframe::egui;
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            // Modest bump from the original 700 to fit more of the button
-            // list without scrolling — kept well under typical laptop-scale
-            // logical screen heights (e.g. 800 on a 1920x1200 @ 150% display)
-            // so the window can never open taller than the screen itself.
-            .with_inner_size([540.0, 740.0])
-            .with_min_inner_size([520.0, 400.0])
+            // Widened for the multi-column "bento grid" desktop layout
+            // (matching the unreal-devtool/ reference mockup) — still kept
+            // well under typical laptop-scale logical screen heights (e.g.
+            // 800 on a 1920x1200 @ 150% display) so it can't open taller
+            // than the screen itself. min_inner_size lets it shrink back
+            // down to something closer to the old compact size if needed.
+            .with_inner_size([1040.0, 760.0])
+            .with_min_inner_size([620.0, 420.0])
             .with_title("Unreal DevTool"),
         ..Default::default()
     };

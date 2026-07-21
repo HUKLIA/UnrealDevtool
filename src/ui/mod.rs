@@ -1,4 +1,6 @@
+mod bar_chart;
 mod chat;
+mod circular_meter;
 mod dashboard;
 mod extras;
 mod git;
@@ -102,6 +104,13 @@ impl eframe::App for DevToolApp {
                     }
                 }
                 self.git_next_state = GitState::Idle;
+                // The op just changed the repo (new commit, new upstream
+                // ref, etc.) — refresh so the companion status panel
+                // doesn't show stale uncommitted/ahead-behind counts.
+                if let Some(dir) = self.git_project_dir() {
+                    self.git_current_branch = crate::ops::git::git_current_branch(&dir);
+                    self.git_status         = crate::ops::git::git_status_summary(&dir);
+                }
             }
 
             // A Google Drive upload just failed — offer a manual fallback
@@ -169,6 +178,7 @@ impl eframe::App for DevToolApp {
         // because the window is shorter than the current button list —
         // the window is still freely resizable too, this is on top of that.
         egui::CentralPanel::default().show(ctx, |ui| {
+            paint_background_decoration(ui);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(4.0);
                 ui.heading(egui::RichText::new("Unreal Master Toolbox").color(egui::Color32::WHITE));
@@ -193,6 +203,39 @@ impl eframe::App for DevToolApp {
             // webview itself failed to load (e.g. WebView2 runtime missing).
             if self.ad_playing { self.end_ad(); }
         }
+    }
+}
+
+/// Faint background grid + a soft accent-colored glow spot in the corner —
+/// matches the reference mockup's `tech-grid` + blurred spotlight decoration.
+/// Painted first, so opaque card fills on top of it cover the grid/glow
+/// wherever content actually sits; it only shows through in the gaps,
+/// exactly like the mockup's `absolute inset-0` background layer.
+fn paint_background_decoration(ui: &egui::Ui) {
+    let rect    = ui.max_rect();
+    let painter = ui.painter();
+    let a       = accent();
+
+    const SPACING: f32 = 42.0;
+    let grid_color = egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 5);
+    let mut x = rect.left();
+    while x < rect.right() {
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, grid_color));
+        x += SPACING;
+    }
+    let mut y = rect.top();
+    while y < rect.bottom() {
+        painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, grid_color));
+        y += SPACING;
+    }
+
+    // Soft glow spot, top-left — several stacked translucent circles stand
+    // in for a true gaussian blur, which egui has no built-in support for.
+    let glow_center = rect.left_top() + egui::vec2(140.0, 90.0);
+    for i in 0..7 {
+        let radius = 40.0 + i as f32 * 34.0;
+        let alpha  = 10 - i * 1;
+        painter.circle_filled(glow_center, radius, egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha));
     }
 }
 
@@ -470,7 +513,20 @@ impl DevToolApp {
         if matches!(self.git_state, GitState::Idle) {
             self.open_git_menu();
         }
-        let action = self.show_git_panel(ui);
+        // The git flow is a sequential state machine (one focused step at a
+        // time), not a bento grid — stretching its action buttons across
+        // the *entire* wide tab would leave one button spanning ~1000px.
+        // But capping it to a fixed width and leaving everything past that
+        // blank read as a broken single-column layout next to Dashboard
+        // and Package's two-column grids. Matching their `columns(2)`
+        // pattern here — action panel on the left, a real repo-status
+        // companion panel (not a placeholder) on the right — gives the tab
+        // the same balanced structure instead of a lopsided void.
+        let mut action = crate::types::GitAction::None;
+        ui.columns(2, |cols| {
+            action = self.show_git_panel(&mut cols[0]);
+            self.show_git_status_panel(&mut cols[1]);
+        });
         match action {
             GitAction::StartCommitPush          => self.git_start_commit_push(),
             GitAction::StartSync                => self.git_start_sync(),
@@ -496,7 +552,14 @@ impl DevToolApp {
             .rounding(egui::Rounding::same(6.0))
             .inner_margin(egui::Margin::same(8.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                // Plain `ui.horizontal` centers its children on the cross
+                // axis (`Align::Center`) — next to the two-line `ui.vertical`
+                // block on the left, that pulled the single-row button group
+                // on the right down to the block's vertical midpoint instead
+                // of lining up with its first line. `horizontal_top` keeps
+                // the same left-to-right flow but aligns everything to the
+                // top edge instead.
+                ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.colored_label(accent(), format!("Update available: {}", info.version));
                         ui.label(egui::RichText::new(format!("Released {}", info.published_at))
@@ -518,19 +581,25 @@ impl DevToolApp {
     }
 
     pub fn show_media_config_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
-            .show(ui, |ui| {
+        // Was its own bespoke `Frame::none()` (PANEL_DARK fill, accent
+        // stroke) — every Extras sub-panel used to build a slightly
+        // different frame (Miku used `card_frame()`, Discord had a custom
+        // fill color, this one an accent-colored stroke), which read as
+        // visually inconsistent flipping between them. `card_frame()` is
+        // the one shared frame the rest of the app already uses.
+        card_frame().show(ui, |ui| {
                 ui.label(egui::RichText::new("🎨  Customize Miku & Sound").size(13.0).color(accent()));
                 ui.add_space(10.0);
 
                 ui.label(egui::RichText::new("2D Image / GIF").size(11.0).color(egui::Color32::GRAY));
                 ui.add_space(4.0);
                 let ctx = ui.ctx().clone();
-                ui.horizontal(|ui| {
+                // Plain `ui.horizontal` (`Align::Center`) vertically centers
+                // the 96px thumbnail frame against the multi-line details
+                // column next to it — the shorter of the two drifted toward
+                // the middle instead of both starting at the same top edge.
+                // `horizontal_top` (`Align::Min`) fixes that.
+                ui.horizontal_top(|ui| {
                     let thumb_max = 96.0;
                     egui::Frame::none()
                         .fill(GIF_BG)
@@ -641,11 +710,10 @@ impl DevToolApp {
                         save_ui_config(&UiConfig { accent_rgb: None });
                     }
                 });
-
-                ui.add_space(14.0);
-                if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                    self.extras_tab = crate::types::ExtrasTab::Miku;
-                }
+                // No trailing "< Back" here — the Extras left sidebar is
+                // the navigation for these sub-panels; a Back button that
+                // just jumps to Miku was a dead-end control duplicating
+                // what the sidebar already does one click away.
             });
     }
 
@@ -668,109 +736,121 @@ impl DevToolApp {
     }
 
     pub fn show_dm_spencer_panel(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("💬  DM on Discord")
-                .size(16.0).color(egui::Color32::WHITE).strong());
-        });
-        ui.add_space(12.0);
+        // The heading used to sit outside this Frame (centered, floating in
+        // open background) while every other Extras sub-panel — Miku,
+        // Self-Check, Customize — puts its heading as the first line
+        // *inside* its card. That made this panel visually inconsistent
+        // with the rest, like its title wasn't attached to the panel it
+        // labels.
+        //
+        // The frame itself was also its own bespoke `Frame::none()` with a
+        // one-off `Color32::from_rgb(30, 30, 40)` fill found nowhere else —
+        // every Extras sub-panel now shares the same `card_frame()` instead
+        // of each hand-rolling fill/stroke/rounding/margins.
+        card_frame().show(ui, |ui| {
+            ui.label(egui::RichText::new("💬  DM on Discord").size(13.0).color(accent()));
+            ui.add_space(10.0);
 
-        egui::Frame::none()
-            .fill(egui::Color32::from_rgb(30, 30, 40))
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(14.0))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("Discord username to search:")
-                    .size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-                ui.add(egui::TextEdit::singleline(&mut self.dm_target_name)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("e.g. gonkindroid"));
-                ui.add_space(10.0);
+            ui.label(egui::RichText::new("Discord username to search:")
+                .size(11.0).color(egui::Color32::GRAY));
+            ui.add_space(4.0);
+            ui.add(egui::TextEdit::singleline(&mut self.dm_target_name)
+                .desired_width(f32::INFINITY)
+                .hint_text("e.g. gonkindroid"));
+            ui.add_space(10.0);
 
-                let can_open = !self.dm_target_name.trim().is_empty();
-                let btn_w = ui.available_width();
+            let can_open = !self.dm_target_name.trim().is_empty();
+            let btn_w = ui.available_width();
+            ui.add_enabled_ui(can_open, |ui| {
+                if ui.add_sized([btn_w, 34.0],
+                    egui::Button::new("🔍  Open Discord & Search")).clicked()
+                {
+                    crate::ops::discord::open_discord_dm(&self.dm_target_name, None, None);
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new("Quick messages (click to send):")
+                .size(11.0).color(egui::Color32::GRAY));
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(can_open, |ui| {
-                    if ui.add_sized([btn_w, 34.0],
-                        egui::Button::new("🔍  Open Discord & Search")).clicked()
-                    {
-                        crate::ops::discord::open_discord_dm(&self.dm_target_name, None, None);
+                    for preset in self.dm_message_presets.clone() {
+                        if ui.button(&preset).clicked() {
+                            crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&preset), None);
+                        }
                     }
                 });
+            });
+            ui.add_space(10.0);
 
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(8.0);
-
-                ui.label(egui::RichText::new("Quick messages (click to send):")
-                    .size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_enabled_ui(can_open, |ui| {
-                        for preset in self.dm_message_presets.clone() {
-                            if ui.button(&preset).clicked() {
-                                crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&preset), None);
-                            }
-                        }
-                    });
-                });
-                ui.add_space(10.0);
-
-                ui.label(egui::RichText::new("Custom message:")
-                    .size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.dm_custom_message)
-                        .desired_width(ui.available_width() - 70.0)
-                        .hint_text("Type a message…"));
-                    let can_send = can_open && !self.dm_custom_message.trim().is_empty();
-                    ui.add_enabled_ui(can_send, |ui| {
-                        if ui.button("Send").clicked() {
-                            crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&self.dm_custom_message.clone()), None);
-                            self.dm_custom_message.clear();
-                        }
-                    });
-                });
-
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("Image to send: ")
+            ui.label(egui::RichText::new("Custom message:")
                 .size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.dm_image_path)
-                        .desired_width(ui.available_width() - 130.0)
-                        .hint_text("C:\\path\\to\\image.png"));
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "png", "webp"]).pick_file() {
-                            self.dm_image_path = path.to_string_lossy().to_string();
-                        }
-                    let can_imag = can_open && !self.dm_image_path.trim().is_empty();
-                    ui.add_enabled_ui(can_imag, |ui| {
-                        if ui.button("Send").clicked() {
-                            crate::ops::discord::open_discord_dm(
-                                &self.dm_target_name,
-                                None,
-                                Some(&self.dm_image_path.clone()),
-                            );
-                        }
-                    })
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                // `TextEdit::desired_width` is a minimum hint, not a
+                // cap — it measured itself wider than the reserved
+                // margin and butted right up against the Send button
+                // with no visible gap. `add_sized` allocates the exact
+                // rect and fits the widget into it instead.
+                let btn_w = 70.0;
+                let text_w = (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(60.0);
+                ui.add_sized(
+                    [text_w, 22.0],
+                    egui::TextEdit::singleline(&mut self.dm_custom_message).hint_text("Type a message…"),
+                );
+                let can_send = can_open && !self.dm_custom_message.trim().is_empty();
+                ui.add_enabled_ui(can_send, |ui| {
+                    if ui.add_sized([btn_w, 22.0], egui::Button::new("Send")).clicked() {
+                        crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&self.dm_custom_message.clone()), None);
+                        self.dm_custom_message.clear();
+                    }
+                });
+            });
+
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Image to send: ")
+            .size(11.0).color(egui::Color32::GRAY));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let gap = ui.spacing().item_spacing.x;
+                let browse_w = 80.0;
+                let send_w = 70.0;
+                let text_w = (ui.available_width() - browse_w - send_w - gap * 2.0).max(60.0);
+                ui.add_sized(
+                    [text_w, 22.0],
+                    egui::TextEdit::singleline(&mut self.dm_image_path).hint_text("C:\\path\\to\\image.png"),
+                );
+                if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse...")).clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "png", "webp"]).pick_file() {
+                        self.dm_image_path = path.to_string_lossy().to_string();
+                    }
+                let can_imag = can_open && !self.dm_image_path.trim().is_empty();
+                ui.add_enabled_ui(can_imag, |ui| {
+                    if ui.add_sized([send_w, 22.0], egui::Button::new("Send")).clicked() {
+                        crate::ops::discord::open_discord_dm(
+                            &self.dm_target_name,
+                            None,
+                            Some(&self.dm_image_path.clone()),
+                        );
+                    }
                 })
             });
 
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(
-            "Opens Discord on this PC, presses Ctrl+K and types the username automatically.")
-            .size(10.0).color(HINT_GRAY));
-        ui.add_space(12.0);
-
-        ui.horizontal(|ui| {
-            if ui.add_sized([100.0, 28.0], egui::Button::new("< Back")).clicked() {
-                self.extras_tab = crate::types::ExtrasTab::Miku;
-            }
+            // Used to float outside the card, on the raw background below
+            // it, along with a "< Back" button and a duplicate "Play
+            // Sponder Bird" button — moved inside so the hint reads as part
+            // of this panel instead of an unattached caption. Back is gone
+            // entirely (the sidebar is the nav); Sponder Bird already has a
+            // button of its own in the Mini-Games panel, so the one here
+            // was just a duplicate.
             ui.add_space(8.0);
-            if ui.add_sized([160.0, 28.0], egui::Button::new("🐦  Play Sponder Bird")).clicked() {
-                self.active_web_panel = Some(crate::webview::WebPanel::SponderBird);
-            }
+            ui.label(egui::RichText::new(
+                "Opens Discord on this PC, presses Ctrl+K and types the username automatically.")
+                .size(10.0).color(HINT_GRAY));
         });
     }
 
@@ -781,10 +861,15 @@ impl DevToolApp {
 
         ui.horizontal(|ui| {
             let has_path  = self.project_path.is_some();
-            let extra_btn = if has_path { 88.0 } else { 0.0 };
             let browse_w  = 78.0;
+            let clear_w   = 80.0;
             let gap       = ui.spacing().item_spacing.x;
-            let text_w    = (ui.available_width() - browse_w - extra_btn - gap * 3.0).max(60.0);
+            // Reserve exactly what the trailing buttons actually consume —
+            // one gap + Browse, plus another gap + Clear only when Clear is
+            // even shown — instead of a separate hardcoded constant that
+            // has to be kept in sync with the buttons by hand.
+            let reserved  = gap + browse_w + if has_path { gap + clear_w } else { 0.0 };
+            let text_w    = (ui.available_width() - reserved).max(60.0);
 
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.project_path_input)
@@ -810,7 +895,7 @@ impl DevToolApp {
                 }
 
             if has_path
-                && ui.add_sized([extra_btn - gap, 22.0], egui::Button::new("x  Clear")).clicked() {
+                && ui.add_sized([clear_w, 22.0], egui::Button::new("x  Clear")).clicked() {
                     clear_project_path();
                     self.project_path = None;
                     self.project_path_input.clear();
@@ -845,19 +930,35 @@ impl DevToolApp {
             let path_text = self.engine_dir.as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "(not found — click Browse to select it manually)".to_string());
+
+            let browse_w = 78.0;
+            let auto_w   = 86.0;
+            let gap      = ui.spacing().item_spacing.x;
+            // This used to be a bare `172.0`/`86.0` that didn't match what
+            // the row below actually consumes (`78.0 + 86.0 + 2 *
+            // item_spacing.x` = 180.0 when the Auto-detect button is shown,
+            // vs. a reserved 172.0) — 8px short, so the row overflowed the
+            // card's right edge and clipped "x Auto-detect" at the window
+            // edge. Deriving the reservation from the real button widths +
+            // real spacing (like `show_project_path_row` does) keeps it
+            // correct regardless of button size changes, and `.max(60.0)`
+            // stops the label from going negative-width on a narrow window.
+            let reserved = gap + browse_w + if has_override { gap + auto_w } else { 0.0 };
+            let label_w  = (ui.available_width() - reserved).max(60.0);
+
             // `Label` defaults to `TextWrapMode::Extend` — it does NOT clip to
             // its allocated size, it grows past it. Without `.truncate()` a
             // long engine path overlaps the Browse/Auto-detect buttons that
             // follow it in this row instead of eliding with "…".
             ui.add_sized(
-                [ui.available_width() - if has_override { 172.0 } else { 86.0 }, 22.0],
+                [label_w, 22.0],
                 egui::Label::new(egui::RichText::new(&path_text).size(12.0).color(HINT_GRAY)).truncate(),
             ).on_hover_text(&path_text);
 
-            if ui.add_sized([78.0, 22.0], egui::Button::new("Browse…")).clicked() {
+            if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse…")).clicked() {
                 self.choose_engine_dir();
             }
-            if has_override && ui.add_sized([86.0, 22.0], egui::Button::new("x  Auto-detect")).clicked() {
+            if has_override && ui.add_sized([auto_w, 22.0], egui::Button::new("x  Auto-detect")).clicked() {
                 self.clear_engine_override();
             }
         });

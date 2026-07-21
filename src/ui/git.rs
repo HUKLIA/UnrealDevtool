@@ -247,6 +247,96 @@ impl DevToolApp {
         action
     }
 
+    /// Companion panel for the Git tab's right column — real repo state
+    /// (uncommitted file count, last commit, ahead/behind vs. the local
+    /// tracking ref, a 14-day commit-activity bar chart, and working-tree
+    /// diffstat), not a decorative placeholder. Shown next to the action
+    /// panel on every git sub-screen so the tab isn't a single narrow card
+    /// adrift in empty space.
+    ///
+    /// Takes `&self`, not `&mut self`: this only ever reads `self.git_status`,
+    /// which is refreshed at its two actual call sites — `open_git_menu` in
+    /// app.rs and the git-task-finished handler in `ui::mod`'s `update` —
+    /// not here. Shelling out to git 60 times a second just to paint a panel
+    /// would be wasteful and would make the UI stutter on a slow disk/repo.
+    pub fn show_git_status_panel(&self, ui: &mut egui::Ui) {
+        Self::git_frame().show(ui, |ui| {
+            ui.label(egui::RichText::new("📊  Repo Status").size(13.0).color(accent()));
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(format!("Branch: {}", self.git_current_branch))
+                    .size(11.0).color(egui::Color32::GRAY),
+            );
+            ui.add_space(10.0);
+
+            let (label, color) = if self.git_status.uncommitted == 0 {
+                ("[OK]  Working tree clean".to_string(), accent())
+            } else {
+                (format!("[!]  {} uncommitted change(s)", self.git_status.uncommitted), WARN_AMBER)
+            };
+            ui.colored_label(color, label);
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new("LAST COMMIT").size(9.5).color(HINT_GRAY));
+            ui.add_space(2.0);
+            match &self.git_status.last_commit {
+                Some(c) => { ui.label(egui::RichText::new(c).size(11.0).color(egui::Color32::LIGHT_GRAY)); }
+                None    => { ui.label(egui::RichText::new("No commits yet").size(11.0).color(HINT_GRAY)); }
+            }
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new("VS. UPSTREAM  (as of last fetch)").size(9.5).color(HINT_GRAY));
+            ui.add_space(2.0);
+            match self.git_status.ahead_behind {
+                Some((0, 0)) => { ui.colored_label(accent(), "Up to date with upstream"); }
+                Some((ahead, behind)) => {
+                    ui.label(
+                        egui::RichText::new(format!("↑ {} ahead   ↓ {} behind", ahead, behind))
+                            .size(11.0).color(egui::Color32::LIGHT_GRAY),
+                    );
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new("No upstream tracking branch set")
+                            .size(10.5).color(HINT_GRAY),
+                    );
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new("COMMIT ACTIVITY  (LAST 14 DAYS)").size(9.5).color(HINT_GRAY));
+            ui.add_space(4.0);
+            if self.git_status.activity.is_empty() {
+                // Empty means the underlying `git log` failed outright (no
+                // repo, no commits at all, git missing) — not "14 real
+                // zeros" — so this shows an explicit "no data" message
+                // instead of a flat, misleading chart.
+                ui.label(egui::RichText::new("No commit history").size(10.5).color(HINT_GRAY));
+            } else {
+                crate::ui::bar_chart::show_bar_chart(ui, &self.git_status.activity, 70.0);
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new("WORKING TREE").size(9.5).color(HINT_GRAY));
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("{} file(s) changed", self.git_status.changed_files))
+                    .size(11.0).color(egui::Color32::LIGHT_GRAY),
+            );
+            ui.horizontal(|ui| {
+                ui.colored_label(accent(), format!("+{}", self.git_status.insertions));
+                ui.add_space(8.0);
+                ui.colored_label(ERR_RED, format!("-{}", self.git_status.deletions));
+            });
+        });
+    }
+
     // ── Shared frame builders ─────────────────────────────────────────────────
 
     fn git_frame() -> egui::Frame {
@@ -254,7 +344,7 @@ impl DevToolApp {
             .fill(PANEL_DARK)
             .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(14.0))
     }
 
     fn code_block() -> egui::Frame {

@@ -5,8 +5,10 @@ use crate::theme::*;
 impl DevToolApp {
     /// Dashboard tab: project/engine setup, Rebuild VS Files, and inline
     /// preflight diagnostics (merges what used to be the separate "Check PC
-    /// Setup" overlay — matches the reference mockup's single-screen
-    /// dashboard instead of a dedicated button+panel).
+    /// Setup" overlay). Two-row bento grid — project+engine side by side,
+    /// then diagnostics+log-scanner side by side — matching the reference
+    /// mockup's `UnrealDashboard.tsx` layout now that the window is wide
+    /// enough to fit it.
     pub fn show_dashboard_tab(&mut self, ui: &mut egui::Ui) {
         if self.show_vs_config {
             let go = self.show_vs_config_panel(ui);
@@ -14,10 +16,17 @@ impl DevToolApp {
             return;
         }
 
-        card_frame().show(ui, |ui| {
-            self.show_project_path_row(ui);
-            ui.add_space(10.0);
-            self.show_engine_path_row(ui);
+        ui.columns(2, |cols| {
+            card_frame().show(&mut cols[0], |ui| {
+                ui.label(egui::RichText::new("📁  ACTIVE PROJECT").size(11.0).color(HINT_GRAY));
+                ui.add_space(8.0);
+                self.show_project_path_row(ui);
+            });
+            card_frame().show(&mut cols[1], |ui| {
+                ui.label(egui::RichText::new("🖥  UNREAL ENGINE").size(11.0).color(HINT_GRAY));
+                ui.add_space(8.0);
+                self.show_engine_path_row(ui);
+            });
         });
         ui.add_space(10.0);
 
@@ -33,14 +42,14 @@ impl DevToolApp {
         }
         ui.add_space(10.0);
 
-        card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🔍  PREFLIGHT DIAGNOSTICS").size(11.0).color(HINT_GRAY));
-            ui.add_space(8.0);
-            self.show_pc_check_content(ui);
+        ui.columns(2, |cols| {
+            card_frame().show(&mut cols[0], |ui| {
+                ui.label(egui::RichText::new("🔍  PREFLIGHT DIAGNOSTICS").size(11.0).color(HINT_GRAY));
+                ui.add_space(8.0);
+                self.show_pc_check_content(ui);
+            });
+            self.show_paste_log_scanner(&mut cols[1]);
         });
-        ui.add_space(10.0);
-
-        self.show_paste_log_scanner(ui);
     }
 
     /// Paste-a-log-excerpt scanner — a small feature gap vs. the reference

@@ -26,11 +26,11 @@ impl DevToolApp {
 
             let box_width = (ui.available_width() - 24.0).min(460.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(box_width, 220.0),
+                egui::vec2(box_width, 250.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     card_frame().show(ui, |ui| {
-                        ui.set_min_size(egui::vec2(box_width - 28.0, 190.0));
+                        ui.set_min_size(egui::vec2(box_width - 28.0, 220.0));
 
                         let progress = self.intro_revealed as f32 / self.intro_log.len().max(1) as f32;
                         ui.add(
@@ -41,8 +41,15 @@ impl DevToolApp {
                         );
                         ui.add_space(8.0);
 
+                        // `build_intro_log` never produces more than 7 lines, so
+                        // this is sized to fit all of them at once — with
+                        // `stick_to_bottom`, a shorter box would scroll such
+                        // that the topmost line sits half-clipped by the
+                        // viewport edge instead of fully visible (that's what
+                        // was happening before this was widened: line [1]
+                        // rendered as a sliver overlapping the progress bar).
                         egui::ScrollArea::vertical()
-                            .max_height(130.0)
+                            .max_height(160.0)
                             .stick_to_bottom(true)
                             .show(ui, |ui| {
                                 for (i, line) in self.intro_log.iter().take(self.intro_revealed).enumerate() {

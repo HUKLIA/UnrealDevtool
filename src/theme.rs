@@ -66,10 +66,27 @@ pub fn apply_miku_theme(ctx: &egui::Context) {
     v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, CARD_BORDER);
     v.widgets.hovered.bg_fill    = accent();
     v.widgets.hovered.fg_stroke  = egui::Stroke::new(1.5, egui::Color32::BLACK);
+    // `Visuals::dark()` leaves hovered/open rounding at its small (~3px)
+    // default while inactive/active were bumped to 10 — every button
+    // visibly snapped to a sharper corner radius the instant the cursor
+    // touched it. Matching all four states stops that flicker.
+    v.widgets.hovered.rounding   = egui::Rounding::same(10.0);
     v.widgets.active.bg_fill     = MIKU_PINK;
     v.widgets.active.fg_stroke   = egui::Stroke::new(1.0, egui::Color32::WHITE);
     v.widgets.active.rounding    = egui::Rounding::same(10.0);
+    v.widgets.open.rounding      = egui::Rounding::same(10.0);
     v.selection.bg_fill          = accent();
-    v.selection.stroke           = egui::Stroke::new(1.0, accent());
+    // Widened from 1.0: this stroke is also what egui draws around a
+    // *focused* TextEdit, so a thicker accent line here doubles as the
+    // "glowing" focus indicator the input fields were missing.
+    v.selection.stroke           = egui::Stroke::new(1.8, accent());
     ctx.set_visuals(v);
+
+    // Default `button_padding` (4, 1) and `item_spacing.y` (3) are tuned for
+    // dense inspector-style UIs, not the roomier "glass card" look this app
+    // is going for — text sat almost flush against input/button edges.
+    ctx.style_mut(|style| {
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        style.spacing.item_spacing.y = 6.0;
+    });
 }

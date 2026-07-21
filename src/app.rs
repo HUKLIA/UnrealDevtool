@@ -8,9 +8,10 @@ use eframe::egui;
 
 use crate::audio::AudioPlayer;
 use crate::config::{
-    clear_engine_path, load_audio_config, load_engine_path, load_media_config, load_project_config, load_project_path,
-    load_ui_config, load_upload_config, save_audio_config, save_engine_path, save_media_config, save_project_config,
-    save_project_path, save_upload_config, AudioConfig, MediaConfig, UploadConfig,
+    clear_engine_path, load_audio_config, load_custom_links, load_engine_path, load_media_config, load_project_config,
+    load_project_path, load_ui_config, load_upload_config, save_audio_config, save_custom_links, save_engine_path,
+    save_media_config, save_project_config, save_project_path, save_upload_config, AudioConfig, CustomLink,
+    MediaConfig, UploadConfig,
 };
 use crate::engine::{build_init_status, detect_unreal_engine, is_valid_engine_dir};
 use crate::gif::GifPlayer;
@@ -87,6 +88,7 @@ pub struct DevToolApp {
     pub git_next_state:          GitState,
     pub git_result:              Arc<Mutex<Option<GitTaskStatus>>>,
     pub git_current_branch:      String,
+    pub git_status:              ops_git::GitStatusSummary,
     pub git_merged_from:         String,
     pub git_commit_msg:          String,
     pub git_new_branch_name:     String,
@@ -101,6 +103,10 @@ pub struct DevToolApp {
     pub dm_message_presets:    Vec<String>,
     pub dm_custom_message:     String,
     pub dm_image_path:         String,
+
+    // Quick Links: user-editable label+URL buttons (Extras tab)
+    pub custom_links:    Vec<CustomLink>,
+    pub links_edit_mode: bool,
 
     // Miku view mode: false = 2D gif (default), true = 3D web
     pub miku_mode_3d: bool,
@@ -251,6 +257,7 @@ impl DevToolApp {
             git_next_state:          GitState::Idle,
             git_result:              Arc::new(Mutex::new(None)),
             git_current_branch:      String::new(),
+            git_status:              ops_git::GitStatusSummary::default(),
             git_merged_from:         String::new(),
             git_commit_msg:          String::new(),
             git_new_branch_name:     String::new(),
@@ -263,6 +270,8 @@ impl DevToolApp {
                                          "Help!!".to_string(),],
             dm_custom_message:         String::new(),
             dm_image_path:             String::new(),
+            custom_links:              load_custom_links(),
+            links_edit_mode:           false,
             miku_mode_3d:              false,
             webview_manager,
             active_web_panel: None,
@@ -299,6 +308,11 @@ impl DevToolApp {
             pasted_log_diagnosis: Vec::new(),
         };
         app.intro_log = app.build_intro_log();
+        // Dashboard is the default tab, so it never goes through
+        // `switch_tab`'s "populate pc_check_items on entry" path — populate
+        // it directly here instead, otherwise Preflight Diagnostics starts
+        // empty until the user manually switches tabs and back.
+        app.refresh_pc_check();
         ops_update::cleanup_old_binary();
         app.check_for_updates(cc.egui_ctx.clone());
         app
@@ -450,6 +464,24 @@ impl DevToolApp {
                 let _ = std::fs::remove_file(dir.join("unreal_devtool_old.exe"));
             }
         self.refresh_app_check();
+    }
+
+    // ── Custom quick links ────────────────────────────────────────────────────
+
+    pub fn save_links(&mut self) {
+        save_custom_links(&self.custom_links);
+    }
+
+    pub fn add_custom_link(&mut self) {
+        self.custom_links.push(CustomLink { label: "New Link".into(), url: String::new() });
+        self.save_links();
+    }
+
+    pub fn remove_custom_link(&mut self, index: usize) {
+        if index < self.custom_links.len() {
+            self.custom_links.remove(index);
+            self.save_links();
+        }
     }
 
     /// Switches the active tab, running whatever one-time setup that tab's
@@ -891,9 +923,16 @@ impl DevToolApp {
         self.show_vs_config      = false;
         self.git_commit_msg.clear();
         self.git_new_branch_name.clear();
-        self.git_current_branch = self.git_project_dir()
-            .map(|d| ops_git::git_current_branch(&d))
-            .unwrap_or_else(|| "unknown".into());
+        match self.git_project_dir() {
+            Some(d) => {
+                self.git_current_branch = ops_git::git_current_branch(&d);
+                self.git_status         = ops_git::git_status_summary(&d);
+            }
+            None => {
+                self.git_current_branch = "unknown".into();
+                self.git_status         = ops_git::GitStatusSummary::default();
+            }
+        }
         self.git_state = GitState::Menu;
     }
 

@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use crate::types::GitTaskStatus;
 
 // ── Low-level git helpers ─────────────────────────────────────────────────────
@@ -29,6 +31,221 @@ pub fn is_conflict(output: &str) -> bool {
 pub fn git_current_branch(dir: &Path) -> String {
     let (ok, out) = run_git(dir, &["branch", "--show-current"]);
     if ok { out.trim().to_string() } else { "unknown".to_string() }
+}
+
+/// Real, locally-derivable repo status for the Git tab's companion panel —
+/// no field here is fabricated: uncommitted count and last commit come
+/// straight from `git status`/`git log`, and ahead/behind comes from the
+/// *local* tracking ref, so it's only as fresh as the last fetch (labeled
+/// as such wherever it's displayed, not presented as live remote state).
+///
+/// `activity`/`insertions`/`deletions`/`changed_files` back the Git tab's
+/// bar-chart panel (`ui::bar_chart::show_bar_chart`) — same rule applies:
+/// every number is derived from an actual git command, and a failed command
+/// (no repo, no commits, git missing) leaves the field at its empty/zero
+/// default rather than inventing a placeholder value. The render side is
+/// responsible for telling "genuinely zero" apart from "couldn't be
+/// measured" (e.g. `activity` empty means "no data", not "zero commits").
+#[derive(Clone, Default)]
+pub struct GitStatusSummary {
+    pub uncommitted:    usize,
+    pub last_commit:    Option<String>,
+    pub ahead_behind:   Option<(usize, usize)>,
+    pub activity:       Vec<(String, usize)>,
+    pub insertions:     usize,
+    pub deletions:      usize,
+    pub changed_files:  usize,
+}
+
+pub fn git_status_summary(dir: &Path) -> GitStatusSummary {
+    let (ok, out) = run_git(dir, &["status", "--porcelain"]);
+    let uncommitted = if ok { out.lines().filter(|l| !l.trim().is_empty()).count() } else { 0 };
+
+    let (ok, out) = run_git(dir, &["log", "-1", "--format=%h  %s  (%cr)"]);
+    let last_commit = if ok && !out.trim().is_empty() { Some(out.trim().to_string()) } else { None };
+
+    let (ok, out) = run_git(dir, &["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+    let ahead_behind = if ok {
+        let parts: Vec<&str> = out.trim().split_whitespace().collect();
+        match (parts.first().and_then(|s| s.parse().ok()), parts.get(1).and_then(|s| s.parse().ok())) {
+            (Some(behind), Some(ahead)) => Some((ahead, behind)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let activity = git_activity_last_14_days(dir);
+    let (insertions, deletions, changed_files) = git_working_tree_diffstat(dir);
+
+    GitStatusSummary { uncommitted, last_commit, ahead_behind, activity, insertions, deletions, changed_files }
+}
+
+/// Commit counts per day for the last 14 days, oldest first, one entry per
+/// day even when that day had zero commits — so the bar chart always gets
+/// 14 evenly spaced bars instead of a sparse, unevenly-gapped set. Returns
+/// an empty `Vec` (never a fabricated all-zero row) if `git log` itself
+/// fails — no repo, no commits at all, or git not installed — so the
+/// caller can render "no data" instead of a misleading flat chart.
+fn git_activity_last_14_days(dir: &Path) -> Vec<(String, usize)> {
+    // `--date=short-local`, not plain `--date=short`: the unsuffixed form
+    // renders each commit in *the committer's own recorded timezone*, so a
+    // teammate's commit lands in a bucket keyed to their calendar day, not
+    // the one this user is looking at. `-local` normalizes every commit to
+    // the viewer's timezone, which is also the timezone `today_days` below
+    // is resolved in — both sides of the lookup have to agree or the counts
+    // silently land in the wrong bar.
+    let (ok, out) = run_git(dir, &["log", "--since=14 days ago", "--date=short-local", "--pretty=format:%cd"]);
+    if !ok {
+        return Vec::new();
+    }
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in out.lines() {
+        let d = line.trim();
+        if !d.is_empty() {
+            *counts.entry(d.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // "Today" as days-since-epoch, computed without pulling in a date/time
+    // crate just for this one chart — `civil_from_days` below turns it (and
+    // each of the 13 preceding days) back into a calendar date to build the
+    // key `git --date=short-local` uses ("YYYY-MM-DD") and the short axis
+    // label ("MM-DD").
+    //
+    // This has to be the *local* day, not the UTC one. Deriving it from
+    // `SystemTime::now()` alone gives UTC, and for anyone not on UTC that
+    // disagrees with `-local` for part of every day — at UTC+8, between
+    // local midnight and 08:00 the UTC date is still yesterday, so the
+    // whole 14-day window shifted back one bar and the commits made so far
+    // today fell outside it entirely and vanished from the chart.
+    let today_days = match local_today_days(dir) {
+        Some(d) => d,
+        None    => return Vec::new(),
+    };
+
+    (0..14i64)
+        .rev()
+        .map(|offset| {
+            let (y, m, d) = civil_from_days(today_days - offset);
+            let key   = format!("{:04}-{:02}-{:02}", y, m, d);
+            let label = format!("{:02}-{:02}", m, d);
+            let count = counts.get(&key).copied().unwrap_or(0);
+            (label, count)
+        })
+        .collect()
+}
+
+/// Days-since-Unix-epoch → Gregorian calendar (year, month, day). Howard
+/// Hinnant's well-known constant-time civil-calendar algorithm (public
+/// domain) — used instead of adding a date/time crate dependency just to
+/// answer "what calendar date is N days before today" for the activity
+/// chart's axis.
+/// Today as days-since-epoch *in the user's local timezone*, to match the
+/// dates `git log --date=short-local` emits.
+///
+/// Rust's std has no timezone API, and this app has no date crate — but git
+/// itself already knows the local offset, and `git var GIT_AUTHOR_IDENT`
+/// reports it alongside the current time as the trailing two fields of an
+/// ident line:
+///
+///     Some Name <a@b.c> 1784644585 -0700
+///
+/// Falls back to the UTC day if that output can't be parsed, which is only
+/// ever off by one near midnight — strictly better than dropping the whole
+/// chart.
+fn local_today_days(dir: &Path) -> Option<i64> {
+    let utc_days = || {
+        SystemTime::now().duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| (d.as_secs() / 86_400) as i64)
+    };
+
+    let (ok, out) = run_git(dir, &["var", "GIT_AUTHOR_IDENT"]);
+    if !ok {
+        return utc_days();
+    }
+
+    // Parse from the right: the name/email prefix is free-form and may
+    // itself contain spaces, but the timestamp and offset are always the
+    // final two fields.
+    let fields: Vec<&str> = out.trim().split_whitespace().collect();
+    let parsed = match (fields.len() >= 2, fields.last(), fields.get(fields.len().wrapping_sub(2))) {
+        (true, Some(offset), Some(ts)) => {
+            let secs: i64 = match ts.parse() {
+                Ok(s)  => s,
+                Err(_) => return utc_days(),
+            };
+            let sign = match offset.as_bytes().first() {
+                Some(b'-') => -1,
+                Some(b'+') =>  1,
+                _          => return utc_days(),
+            };
+            // ±HHMM
+            let digits = &offset[1..];
+            if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return utc_days();
+            }
+            let hh: i64 = digits[..2].parse().ok()?;
+            let mm: i64 = digits[2..].parse().ok()?;
+            Some(secs + sign * (hh * 3600 + mm * 60))
+        }
+        _ => None,
+    };
+
+    match parsed {
+        // Floor-divide: `/` truncates toward zero, which would land on the
+        // wrong day for pre-1970 local timestamps.
+        Some(local_secs) => Some(local_secs.div_euclid(86_400)),
+        None             => utc_days(),
+    }
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y   = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp  = (5 * doy + 2) / 153;
+    let d   = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m   = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y   = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Working-tree changes vs. `HEAD` (`git diff --numstat HEAD`): total lines
+/// added/removed and how many files changed. `changed_files` counts every
+/// numstat row (including binary files, which numstat reports as `-  -
+/// path`); `insertions`/`deletions` only sum the rows that parse as real
+/// numbers, silently skipping binary rows' `-` columns rather than treating
+/// them as zero. Fails closed to `(0, 0, 0)` — no repo, no `HEAD` yet (a
+/// brand new repo with no commits), or git missing all land here, and the
+/// caller shows "no data" rather than a real-looking zero.
+fn git_working_tree_diffstat(dir: &Path) -> (usize, usize, usize) {
+    let (ok, out) = run_git(dir, &["diff", "--numstat", "HEAD"]);
+    if !ok {
+        return (0, 0, 0);
+    }
+
+    let mut insertions    = 0usize;
+    let mut deletions     = 0usize;
+    let mut changed_files = 0usize;
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        changed_files += 1;
+        let mut cols = line.splitn(3, '\t');
+        let ins = cols.next().unwrap_or("-");
+        let del = cols.next().unwrap_or("-");
+        if let Ok(i) = ins.parse::<usize>() { insertions += i; }
+        if let Ok(d) = del.parse::<usize>() { deletions  += d; }
+    }
+    (insertions, deletions, changed_files)
 }
 
 // ── Background task functions (run on worker thread) ─────────────────────────

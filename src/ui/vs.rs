@@ -11,7 +11,7 @@ impl DevToolApp {
             .fill(PANEL_DARK)
             .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("🔧  Rebuild Project Files").size(13.0).color(accent()));
                 ui.add_space(8.0);

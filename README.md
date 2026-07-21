@@ -9,17 +9,23 @@ A Windows desktop tool for Unreal Engine 5 developers: packages builds, regenera
 
 ## UI
 
-A brief animated boot-log splash (built from what was actually detected — your real project/engine/git state, not placeholder text) leads into the main window: a dark "glass panel" theme with a teal accent, organized into five tabs instead of one long scrolling button list. Tab content fades in on switch. The window centers itself on the monitor once at launch, and is otherwise completely free to move/resize — it never repositions itself again after that first frame.
+A brief animated boot-log splash (built from what was actually detected — your real project/engine/git state, not placeholder text) leads into the main window: a dark "glass panel" theme with a teal accent, a faint background tech-grid, and a soft corner glow. The window opened wide (~1040×760) for a multi-column "bento grid" desktop layout — Dashboard and Package show side-by-side cards, Chat and Extras use a left sidebar + main content area — organized into five tabs instead of one long scrolling button list. Tab content fades in on switch. The window centers itself on the monitor once at launch, and is otherwise completely free to move/resize — it never repositions itself again after that first frame.
 
 | Tab | Contents |
 |---|---|
-| **Dashboard** | Project/engine path rows with **Browse…** overrides, **Rebuild VS Files**, and inline preflight diagnostics (engine/project validity, disk space, the space-in-path UAT bug, and a scan of the most recent build log against known UAT/UBT error signatures — plus a box to paste an arbitrary log excerpt to scan instead) |
-| **Package** | Package/exe name, version (auto-incremented or custom), the space-fix warning, and **Start Packaging** / **Fast Package**. Name the package `TACHYON` (any case) for a one-time trailer video in place of the usual GIF |
+| **Dashboard** | Two-row bento grid: project path + engine path side by side (with **Browse…** overrides), **Rebuild VS Files**, then preflight diagnostics + a build-log scanner side by side (engine/project validity, disk space, the space-in-path UAT bug, a scan of the most recent build log against known UAT/UBT error signatures, and a box to paste an arbitrary log excerpt to scan instead) |
+| **Package** | Left: package/exe name, version (auto-incremented or custom), the space-fix warning. Right: a custom-painted circular progress ring (0% idle / holds at 100% after a run — the actual *live* packaging progress still uses the full-screen Miku view, unchanged) plus **Start Packaging** / **Fast Package**. Name the package `TACHYON` (any case) for a one-time trailer video in place of the usual GIF |
 | **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), merge current branch into main |
-| **Chat** | Dev Assistant — a chat panel wired to a local LLM. Auto-detects Ollama (`:11434`) and LM Studio (`:1234`), lets you pick server/model, and streams responses with your current engine/project/git/status injected as context |
-| **Extras** | Miku Visualizer (2D GIF / 3D WebGL toggle), Cookie Clicker & Sponder Bird, **App Self-Check** (the DevTool's own install/config/update health — separate from Dashboard's project/engine diagnostics), DM on Discord, and Customize (GIF/sound overrides, accent color — five presets or a full picker), plus Quick Links to Claude/ChatGPT/Gemini/Epic Games and the Unreal docs assistant |
+| **Chat** | Dev Assistant — left sidebar shows detected LLM servers as selectable cards (auto-detects Ollama `:11434` and LM Studio `:1234`) plus a live "context injected" preview (project/engine/space-warning/git branch); right side is the chat itself, streaming responses with that same context sent on every message |
+| **Extras** | Left sidebar: Miku Visualizer (2D GIF / 3D WebGL toggle), Mini-Games (Cookie Clicker, Sponder Bird), **App Self-Check** (the DevTool's own install/config/update health — separate from Dashboard's project/engine diagnostics), DM on Discord, Customize (GIF/sound overrides, accent color — five presets or a full picker), and **Quick Links** underneath |
 
 Engine detection reads `EngineAssociation` from the `.uproject` file to auto-find the exact matching engine via the registry. If auto-detection can't find it (non-standard install, source build, missing launcher registry keys), Browse… lets you point at the engine folder manually — the override persists and always wins over auto-detection until cleared.
+
+---
+
+## Quick Links
+
+Fully user-editable — click **✏ Edit** under Quick Links (Extras tab) to rename, retarget, add, or remove any of them; changes save immediately to `links.json`. Seeded by default with Claude, ChatGPT, Gemini, Epic Games, and the Unreal docs assistant (real URLs), plus Trello, Jira, Task List, and Requirement Check (empty URL — there's no universal default for a team's own board/doc, so these start unset). Clicking a link with no URL set opens the editor instead of navigating nowhere.
 
 ---
 
@@ -70,7 +76,8 @@ src/
     vs.rs             VS-rebuild config panel (opened from the Dashboard tab)
     git.rs            Git tab panels
     chat.rs           Chat tab (Dev Assistant)
-    extras.rs         Extras tab + its Miku/Games sub-nav
+    extras.rs         Extras tab sidebar nav + Quick Links (editable) + Miku/Games sub-panels
+    circular_meter.rs Custom-painted progress ring (Package tab)
     preflight.rs      Check PC Setup content, space-fix warning box
     selfcheck.rs      App Self-Check panel (an Extras sub-tab)
   ops/            everything that isn't UI — file/process/network work

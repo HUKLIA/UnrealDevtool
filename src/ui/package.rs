@@ -18,7 +18,7 @@ impl DevToolApp {
             .fill(PANEL_DARK)
             .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("📤  Upload / Copy Packaged Build").size(13.0).color(accent()));
                 ui.add_space(6.0);
@@ -197,12 +197,8 @@ impl DevToolApp {
                        && !self.exe_name_input.trim().is_empty()
                        && version_valid;
 
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
-            .show(ui, |ui| {
+        ui.columns(2, |cols| {
+            card_frame().show(&mut cols[0], |ui| {
                 ui.label(egui::RichText::new("📦  Package Configuration").size(13.0).color(accent()));
                 ui.add_space(10.0);
 
@@ -277,21 +273,32 @@ impl DevToolApp {
                         });
                     ui.add_space(8.0);
                 }
+            });
 
-                ui.horizontal(|ui| {
+            card_frame().show(&mut cols[1], |ui| {
+                ui.vertical_centered(|ui| {
+                    let progress = *self.progress.lock().unwrap_or_else(|e| e.into_inner());
+                    let stage = if progress >= 1.0 { "Last run completed" } else { "UAT BuildCookRun pipeline" };
+                    crate::ui::circular_meter::show_circular_meter(ui, progress, stage);
+                });
+                ui.add_space(10.0);
+                ui.vertical_centered(|ui| {
                     ui.add_enabled_ui(can_start, |ui| {
-                        if ui.add_sized([150.0, 32.0], egui::Button::new(">>  Start Packaging")).clicked() {
+                        if ui.add_sized([220.0, 34.0], egui::Button::new(">>  Start Packaging")).clicked() {
                             action = Some(false);
                         }
-                        if ui.add_sized([110.0, 32.0], egui::Button::new("⚡  Fast Package")).clicked() {
+                        ui.add_space(6.0);
+                        if ui.add_sized([220.0, 34.0], egui::Button::new("⚡  Fast Package")).clicked() {
                             action = Some(true);
                         }
                     });
-                    if ui.add_sized([90.0, 32.0], egui::Button::new("x  Cancel")).clicked() {
+                    ui.add_space(6.0);
+                    if ui.add_sized([220.0, 28.0], egui::Button::new("x  Cancel")).clicked() {
                         self.switch_tab(crate::types::AppTab::Dashboard);
                     }
                 });
             });
+        });
         action
     }
 
@@ -303,7 +310,7 @@ impl DevToolApp {
             .fill(PANEL_DARK)
             .stroke(egui::Stroke::new(1.0, accent()))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("📁  Packaging complete!").size(13.0).color(accent()));
                 ui.add_space(6.0);
@@ -336,7 +343,7 @@ impl DevToolApp {
             .fill(PANEL_DARK)
             .stroke(egui::Stroke::new(1.0, WARN_AMBER))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
                 ui.colored_label(WARN_AMBER, "⚠  Google Drive upload failed");
                 ui.add_space(6.0);

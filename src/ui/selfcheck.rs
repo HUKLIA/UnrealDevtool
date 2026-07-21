@@ -5,12 +5,10 @@ use crate::theme::*;
 
 impl DevToolApp {
     pub fn show_app_check_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(12.0))
-            .show(ui, |ui| {
+        // Was its own bespoke `Frame::none()` — every Extras sub-panel now
+        // shares the one `card_frame()` from theme.rs instead of each
+        // hand-rolling its own fill/stroke/rounding/margins.
+        card_frame().show(ui, |ui| {
                 ui.label(egui::RichText::new("⚙  App Self-Check").size(13.0).color(accent()));
                 ui.label(
                     egui::RichText::new("The DevTool app's own install/config/update health — \

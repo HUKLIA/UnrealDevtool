@@ -201,3 +201,48 @@ pub fn save_ui_config(cfg: &UiConfig) {
         let _ = fs::write(dir.join("ui.cfg"), line);
     }
 }
+
+// ── Custom quick links (`links.json`) ────────────────────────────────────────
+// User-editable label+URL buttons shown in the Extras tab. Seeded with the
+// original hardcoded set plus project-management links the user asked for —
+// those have no sensible universal default (a Trello board / Jira project is
+// specific to one team), so they start with an empty URL: clicking one with
+// no URL set opens it for editing instead of navigating nowhere.
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct CustomLink {
+    pub label: String,
+    pub url:   String,
+}
+
+pub fn default_custom_links() -> Vec<CustomLink> {
+    vec![
+        CustomLink { label: "Claude".into(),            url: "https://claude.ai/new".into() },
+        CustomLink { label: "ChatGPT".into(),           url: "https://chatgpt.com/".into() },
+        CustomLink { label: "Gemini".into(),            url: "https://gemini.google.com/app".into() },
+        CustomLink { label: "Epic Games".into(),        url: "https://www.epicgames.com/".into() },
+        CustomLink { label: "Unreal Docs".into(),       url: "https://dev.epicgames.com/community/assistant/unreal-engine".into() },
+        CustomLink { label: "Trello".into(),            url: String::new() },
+        CustomLink { label: "Jira".into(),              url: String::new() },
+        CustomLink { label: "Task List".into(),         url: String::new() },
+        CustomLink { label: "Requirement Check".into(), url: String::new() },
+    ]
+}
+
+pub fn load_custom_links() -> Vec<CustomLink> {
+    let Some(dir) = config_dir() else { return default_custom_links() };
+    let path = dir.join("links.json");
+    match fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Vec<CustomLink>>(&s).ok()) {
+        Some(links) if !links.is_empty() => links,
+        _ => default_custom_links(),
+    }
+}
+
+pub fn save_custom_links(links: &[CustomLink]) {
+    if let Some(dir) = config_dir() {
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(json) = serde_json::to_string_pretty(links) {
+            let _ = fs::write(dir.join("links.json"), json);
+        }
+    }
+}
