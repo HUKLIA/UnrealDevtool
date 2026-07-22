@@ -23,12 +23,6 @@ use std::sync::atomic::Ordering;
 /// 5 minutes: notices a new build quickly without burning the 60 req/hr limit.
 const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
-/// Upper bound on how long the TACHYON ad is allowed to occupy the busy view
-/// before we give up waiting for its `ended` event and revert to normal
-/// gif+music ourselves (video failed to load, autoplay got blocked, etc.).
-/// The clip is ~54s; this gives generous slack for a slow WebView2 cold start.
-const AD_SAFETY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
-
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.center_window_on_startup(ctx);
@@ -79,12 +73,6 @@ impl eframe::App for DevToolApp {
                 a.stop();
                 a.set_speed(1.0);
             }
-            // Defensive: the real UAT task finished (e.g. a fast cancel)
-            // while the ad was still playing. Going to idle view either way,
-            // so just clear the flags — no music should start here (the
-            // `a.stop()` above already covers audio correctly).
-            self.ad_playing    = false;
-            self.ad_started_at = None;
             self.fast_package_mode = false;
             let git_status = self.git_result.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(gs) = git_status {
@@ -138,16 +126,6 @@ impl eframe::App for DevToolApp {
 
         }
 
-        // TACHYON ad: revert to normal gif+music on its `ended` event, or on
-        // a safety-timeout if that event never arrives.
-        if self.ad_playing {
-            let ended     = self.webview_manager.take_ad_ended();
-            let timed_out = self.ad_started_at.is_some_and(|t| t.elapsed() > AD_SAFETY_TIMEOUT);
-            if ended || timed_out {
-                self.end_ad();
-            }
-        }
-
         if let Some(a) = &mut self.audio_player { a.tick(); }
 
         // Chat: once the background stream finishes, fold the accumulated
@@ -199,9 +177,6 @@ impl eframe::App for DevToolApp {
         let ppp = ctx.pixels_per_point();
         if let Some(err) = self.webview_manager.update(self.pending_webview, ppp) {
             self.set_status(err);
-            // Don't make the user wait out the full safety-timeout if the
-            // webview itself failed to load (e.g. WebView2 runtime missing).
-            if self.ad_playing { self.end_ad(); }
         }
     }
 }
@@ -252,36 +227,31 @@ impl DevToolApp {
             ui.add_space(6.0);
         }
         let dt = ctx.input(|i| i.stable_dt);
-        if !self.ad_playing && !self.miku_mode_3d {
+        if !self.miku_mode_3d {
             let gif_dt = if self.fast_package_mode { dt * 5.0 } else { dt };
             if let Some(gif) = &mut self.gif_player { gif.advance(ctx, gif_dt); }
         }
 
         // ── 2D / 3D toggle ────────────────────────────────────────────────────
-        // Hidden while the ad plays — switching preview mode mid-ad doesn't
-        // mean anything; whatever mode was selected resumes automatically
-        // once the ad ends, since `miku_mode_3d` is never touched below.
-        if !self.ad_playing {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Miku:").size(11.0).color(HINT_GRAY));
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Miku:").size(11.0).color(HINT_GRAY));
 
-                let active   = egui::Color32::from_rgb(0, 180, 160);
-                let inactive = egui::Color32::from_rgb(40, 40, 55);
+            let active   = egui::Color32::from_rgb(0, 180, 160);
+            let inactive = egui::Color32::from_rgb(40, 40, 55);
 
-                let btn2d = egui::Button::new(egui::RichText::new("2D").size(11.0))
-                    .fill(if !self.miku_mode_3d { active } else { inactive });
-                if ui.add_sized([36.0, 20.0], btn2d).clicked() && self.miku_mode_3d {
-                    self.miku_mode_3d = false;
-                    if let Some(g) = &mut self.gif_player { g.reset(); }
-                }
+            let btn2d = egui::Button::new(egui::RichText::new("2D").size(11.0))
+                .fill(if !self.miku_mode_3d { active } else { inactive });
+            if ui.add_sized([36.0, 20.0], btn2d).clicked() && self.miku_mode_3d {
+                self.miku_mode_3d = false;
+                if let Some(g) = &mut self.gif_player { g.reset(); }
+            }
 
-                let btn3d = egui::Button::new(egui::RichText::new("3D").size(11.0))
-                    .fill(if self.miku_mode_3d { active } else { inactive });
-                if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
-                    self.miku_mode_3d = true;
-                }
-            });
-        }
+            let btn3d = egui::Button::new(egui::RichText::new("3D").size(11.0))
+                .fill(if self.miku_mode_3d { active } else { inactive });
+            if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
+                self.miku_mode_3d = true;
+            }
+        });
         ui.add_space(4.0);
 
         let gif_size = egui::vec2(300.0, 252.0);
@@ -292,10 +262,7 @@ impl DevToolApp {
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    if self.ad_playing {
-                        let (rect, _) = ui.allocate_exact_size(gif_size, egui::Sense::hover());
-                        self.pending_webview = Some((crate::webview::WebPanel::Ad, rect));
-                    } else if self.miku_mode_3d {
+                    if self.miku_mode_3d {
                         let (rect, _) = ui.allocate_exact_size(gif_size, egui::Sense::hover());
                         self.pending_webview = Some((crate::webview::WebPanel::Miku3D, rect));
                     } else if let Some(gif) = &self.gif_player {

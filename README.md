@@ -14,7 +14,7 @@ A brief animated boot-log splash (built from what was actually detected — your
 | Tab | Contents |
 |---|---|
 | **Dashboard** | Two-row bento grid: project path + engine path side by side (with **Browse…** overrides), **Rebuild VS Files**, then preflight diagnostics + a build-log scanner side by side (engine/project validity, disk space, the space-in-path UAT bug, a scan of the most recent build log against known UAT/UBT error signatures, and a box to paste an arbitrary log excerpt to scan instead) |
-| **Package** | Left: package/exe name, version (auto-incremented or custom), the space-fix warning. Right: a custom-painted circular progress ring (0% idle / holds at 100% after a run — the actual *live* packaging progress still uses the full-screen Miku view, unchanged) plus **Start Packaging** / **Fast Package**. Name the package `TACHYON` (any case) for a one-time trailer video in place of the usual GIF |
+| **Package** | Left: package/exe name, version (auto-incremented or custom), the space-fix warning. Right: a custom-painted circular progress ring (0% idle / holds at 100% after a run — the actual *live* packaging progress still uses the full-screen Miku view, unchanged) plus **Start Packaging** / **Fast Package** |
 | **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), merge current branch into main |
 | **Chat** | Dev Assistant — left sidebar shows detected LLM servers as selectable cards (auto-detects Ollama `:11434` and LM Studio `:1234`) plus a live "context injected" preview (project/engine/space-warning/git branch); right side is the chat itself, streaming responses with that same context sent on every message |
 | **Extras** | Left sidebar: Miku Visualizer (2D GIF / 3D WebGL toggle), Mini-Games (Cookie Clicker, Sponder Bird), **App Self-Check** (the DevTool's own install/config/update health — separate from Dashboard's project/engine diagnostics), DM on Discord, Customize (GIF/sound overrides, accent color — five presets or a full picker), and **Quick Links** underneath |
@@ -89,7 +89,7 @@ src/
     llm.rs            Ollama / LM Studio client (provider detection, streaming chat)
     selfcheck.rs      app-itself diagnostics
     update.rs         GitHub release check, self-update, old-binary cleanup
-    discord.rs, ads.rs  DM-on-Discord, TACHYON ad
+    discord.rs        DM-on-Discord
   engine.rs       Unreal Engine detection (registry / EngineAssociation)
   config.rs       all persisted settings (%APPDATA%\UnrealDevTool)
   types.rs        shared enums (GitState, IdeChoice, ...)
@@ -153,8 +153,8 @@ If an upload fails (expired auth, no permission on the destination, network bloc
 - Engine detection reads `EngineAssociation` from the `.uproject` file to find the exact matching engine version; a manually-picked engine folder (via Browse…) persists across restarts and always wins over auto-detection until cleared
 - Force push to main is intentionally not implemented
 - The exe is fully portable — no installer or runtime needed (WebView2 aside)
-- The exe bundles rclone.exe and the TACHYON trailer video, so it's a large download (~150 MB) — everything still runs from the single file with no separate assets to manage
-- rclone.exe and the trailer video are extracted to `%APPDATA%\UnrealDevtool\` on first use
+- The exe bundles rclone.exe (~75 MB), so it's a large download — everything still runs from the single file with no separate assets to manage
+- rclone.exe is extracted to `%APPDATA%\UnrealDevtool\` on first use
 
 ---
 

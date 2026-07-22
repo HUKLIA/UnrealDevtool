@@ -125,11 +125,6 @@ pub struct DevToolApp {
     pub fast_package_mode:  bool,
     pub task_started_at:    Option<Instant>,
 
-    // TACHYON packaging ad: plays once (video + its own baked-in audio) in
-    // place of the normal gif/3D preview, then reverts automatically.
-    pub ad_playing:    bool,
-    pub ad_started_at: Option<Instant>,
-
     // Custom media (2D image/GIF + looping sound)
     pub custom_gif_path:   Option<PathBuf>,
     pub custom_sound_path: Option<PathBuf>,
@@ -281,8 +276,6 @@ impl DevToolApp {
             last_update_check:  Instant::now(),
             fast_package_mode:  false,
             task_started_at:    None,
-            ad_playing:         false,
-            ad_started_at:      None,
             custom_gif_path,
             custom_sound_path,
             chat_history:    Vec::new(),
@@ -695,27 +688,6 @@ impl DevToolApp {
         self.set_status("[OK] Restored default sound.".into());
     }
 
-    // ── TACHYON packaging ad ──────────────────────────────────────────────────
-
-    /// Ends the TACHYON ad (natural `ended` event, safety-timeout, or webview
-    /// load failure) and resumes whatever the user would normally see: gif
-    /// reset to frame 0, looping background music restarted at the correct
-    /// speed. A no-op if the ad isn't currently playing.
-    pub fn end_ad(&mut self) {
-        if !self.ad_playing { return; }
-        self.ad_playing    = false;
-        self.ad_started_at = None;
-        if let Some(g) = &mut self.gif_player { g.reset(); }
-        if let Some(a) = &mut self.audio_player {
-            // `set_speed` only auto-restarts playback when already marked
-            // playing, so calling it before the explicit `play_looping()`
-            // just primes the speed for that call — no stop-then-append
-            // race here since audio was never started for the ad path.
-            a.set_speed(if self.fast_package_mode { 2.5 } else { 1.0 });
-            a.play_looping();
-        }
-    }
-
     // ── Package actions ───────────────────────────────────────────────────────
 
     pub fn open_package_config(&mut self) {
@@ -767,16 +739,7 @@ impl DevToolApp {
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        self.ad_playing = pack_name.eq_ignore_ascii_case("TACHYON") && crate::ops::ads::ad_video_url().is_some();
-        if self.ad_playing {
-            self.ad_started_at = Some(Instant::now());
-            self.webview_manager.restart_ad();
-            // The ad has its own baked-in audio — skip play_looping() so it
-            // doesn't compete with the ad's soundtrack.
-        } else {
-            self.ad_started_at = None;
-            if let Some(a) = &mut self.audio_player { a.play_looping(); }
-        }
+        if let Some(a) = &mut self.audio_player { a.play_looping(); }
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
@@ -817,14 +780,7 @@ impl DevToolApp {
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        self.ad_playing = pack_name.eq_ignore_ascii_case("TACHYON") && crate::ops::ads::ad_video_url().is_some();
-        if self.ad_playing {
-            self.ad_started_at = Some(Instant::now());
-            self.webview_manager.restart_ad();
-        } else {
-            self.ad_started_at = None;
-            if let Some(a) = &mut self.audio_player { a.set_speed(2.5); a.play_looping(); }
-        }
+        if let Some(a) = &mut self.audio_player { a.set_speed(2.5); a.play_looping(); }
         let status_clone  = Arc::clone(&self.status_message);
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);

@@ -1,4 +1,3 @@
-pub mod ads;
 pub mod diagnostics;
 pub mod discord;
 pub mod git;

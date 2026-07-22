@@ -5,8 +5,6 @@ use raw_window_handle::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use wry::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use wry::{Rect, WebContext, WebView, WebViewBuilder};
 
@@ -16,9 +14,6 @@ pub enum WebPanel {
     Miku3D,
     CookieClicker,
     SponderBird,
-    /// The TACHYON packaging ad — plays a local mp4 once. Unlike the other
-    /// panels its URL isn't a fixed remote string (see `ads::ad_video_url`).
-    Ad,
 }
 
 impl WebPanel {
@@ -27,7 +22,6 @@ impl WebPanel {
             WebPanel::Miku3D        => "https://huklia.github.io/MikuTest/",
             WebPanel::CookieClicker => "https://orteil.dashnet.org/cookieclicker/",
             WebPanel::SponderBird   => "https://nicktam1.github.io/SponderBirdNew/",
-            WebPanel::Ad            => crate::ops::ads::ad_video_url().unwrap_or("about:blank"),
         }
     }
 
@@ -36,7 +30,6 @@ impl WebPanel {
             WebPanel::Miku3D        => "3D Miku",
             WebPanel::CookieClicker => "Cookie Clicker",
             WebPanel::SponderBird   => "Sponder Bird",
-            WebPanel::Ad            => "Advertisement",
         }
     }
 }
@@ -119,26 +112,6 @@ const MIKU3D_FIT_SCRIPT: &str = r#"
 })();
 "#;
 
-/// A raw local media file navigated to directly (no HTML wrapper) gets a
-/// Chromium-synthesized `<video>` element that doesn't exist yet when this
-/// init script runs, so poll for it, then report the `ended` event back to
-/// Rust via `window.ipc.postMessage` (auto-injected by wry on every page).
-const AD_ENDED_SCRIPT: &str = r#"
-(function() {
-  function attach(v) {
-    if (v.__adEndedBound) return;
-    v.__adEndedBound = true;
-    v.addEventListener('ended', function() { window.ipc.postMessage('ended'); });
-  }
-  var tries = 0;
-  var iv = setInterval(function() {
-    var v = document.querySelector('video');
-    if (v) { attach(v); clearInterval(iv); }
-    else if (++tries > 100) { clearInterval(iv); }
-  }, 100);
-})();
-"#;
-
 /// A created (or failed) webview plus the bounds/visibility we last applied
 /// to it, so `update` can skip redundant `set_bounds`/`set_visible` calls.
 /// Calling these every frame causes WebView2 to repeatedly drop focus, which
@@ -154,21 +127,10 @@ struct ViewEntry {
 /// and shows/hides/repositions them to follow an egui placeholder rect.
 /// Only one panel is visible at a time.
 pub struct WebViewManager {
-    parent:         ParentWindow,
-    views:          HashMap<WebPanel, ViewEntry>,
-    active:         Option<WebPanel>,
-    web_context:    WebContext,
-    // The Ad panel gets its own WebContext (own WebView2 user-data folder),
-    // which forces its own browser process rather than sharing the one the
-    // other three panels use. This matters because WebView2 only honors
-    // `--autoplay-policy=no-user-gesture-required` (set via `with_autoplay`)
-    // the first time a browser process is created for a given user-data
-    // folder — if the Ad panel shared `web_context` and any of Miku3D /
-    // CookieClicker / SponderBird had already been opened first, the shared
-    // process would already be running without that flag, and the ad would
-    // silently load paused, waiting for a user gesture that never comes.
-    ad_web_context: WebContext,
-    ad_ended:       Arc<AtomicBool>,
+    parent:      ParentWindow,
+    views:       HashMap<WebPanel, ViewEntry>,
+    active:      Option<WebPanel>,
+    web_context: WebContext,
 }
 
 fn webview_data_dir() -> Option<PathBuf> {
@@ -178,26 +140,16 @@ fn webview_data_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-fn webview_ad_data_dir() -> Option<PathBuf> {
-    let appdata = std::env::var_os("APPDATA")?;
-    let dir = PathBuf::from(appdata).join("UnrealDevtool").join("webview2-ad");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
-
 impl WebViewManager {
     pub fn new(window: RawWindowHandle, display: RawDisplayHandle) -> Self {
         // Persistent data dir so localStorage / cookies survive app restarts.
         // Cookie Clicker saves its game here instead of starting fresh each time.
-        let web_context    = WebContext::new(webview_data_dir());
-        let ad_web_context = WebContext::new(webview_ad_data_dir());
+        let web_context = WebContext::new(webview_data_dir());
         Self {
             parent: ParentWindow { window, display },
             views: HashMap::new(),
             active: None,
             web_context,
-            ad_web_context,
-            ad_ended: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -229,28 +181,15 @@ impl WebViewManager {
         if !self.views.contains_key(&panel) {
             let init_script = match panel {
                 WebPanel::Miku3D => format!("{SUPPRESS_DIALOGS_SCRIPT}{MIKU3D_FIT_SCRIPT}"),
-                WebPanel::Ad     => AD_ENDED_SCRIPT.to_string(),
                 _                => SUPPRESS_DIALOGS_SCRIPT.to_string(),
             };
-            let mut builder = WebViewBuilder::new_as_child(&self.parent)
+            let builder = WebViewBuilder::new_as_child(&self.parent)
                 .with_url(panel.url())
                 .with_bounds(make_rect(bounds))
                 .with_initialization_script(&init_script);
 
-            if panel == WebPanel::Ad {
-                let ended = Arc::clone(&self.ad_ended);
-                builder = builder.with_autoplay(true).with_ipc_handler(move |req: wry::http::Request<String>| {
-                    if req.body() == "ended" {
-                        ended.store(true, Ordering::Relaxed);
-                    }
-                });
-            }
-
-            let view = if panel == WebPanel::Ad {
-                builder.with_web_context(&mut self.ad_web_context).build()
-            } else {
-                builder.with_web_context(&mut self.web_context).build()
-            }.map_err(|e| e.to_string());
+            let view = builder.with_web_context(&mut self.web_context).build()
+                .map_err(|e| e.to_string());
             self.views.insert(panel, ViewEntry { view, bounds, visible: false });
         }
         let entry = self.views.get_mut(&panel).unwrap();
@@ -277,25 +216,6 @@ impl WebViewManager {
         }
     }
 
-    /// Forces the Ad panel to re-navigate from scratch — fresh `<video>`
-    /// element, autoplay fires again, `ended` listener re-attaches — so
-    /// triggering TACHYON a second time in the same session replays the ad
-    /// instead of showing an already-ended, frozen last frame. A no-op if
-    /// the panel hasn't been created yet (its first-ever creation above
-    /// already starts it at time zero, so no reload is needed then).
-    pub fn restart_ad(&mut self) {
-        self.ad_ended.store(false, Ordering::Relaxed);
-        if let Some(entry) = self.views.get_mut(&WebPanel::Ad)
-            && let Ok(v) = &entry.view {
-                let _ = v.load_url(WebPanel::Ad.url());
-            }
-    }
-
-    /// Edge-triggered: `true` exactly once, the first call after the ad's
-    /// `ended` event fired since the last time this was checked.
-    pub fn take_ad_ended(&mut self) -> bool {
-        self.ad_ended.swap(false, Ordering::Relaxed)
-    }
 }
 
 fn to_physical_bounds(rect: egui::Rect, ppp: f32) -> (i32, i32, u32, u32) {
