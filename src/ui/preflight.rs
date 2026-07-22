@@ -47,16 +47,38 @@ impl DevToolApp {
     }
 
     /// Shared by `preflight` and `selfcheck` panels for consistent
-    /// [OK]/[WARN]/[FAIL] rendering of a `CheckItem`.
+    /// [OK]/[WARN]/[FAIL] rendering of a `CheckItem`. Each item gets its own
+    /// faint row (a colored left rule + subtle fill) rather than bare
+    /// stacked text — a flat list of same-sized lines with no separation
+    /// between items reads as one undifferentiated wall of text, especially
+    /// once a couple of items wrap to two or three lines each.
     pub(crate) fn show_check_item(ui: &mut egui::Ui, item: &CheckItem) {
         let (prefix, color) = match item.status {
-            CheckStatus::Ok   => ("[OK]",   accent()),
-            CheckStatus::Warn => ("[WARN]", WARN_AMBER),
-            CheckStatus::Fail => ("[FAIL]", ERR_RED),
+            CheckStatus::Ok   => ("OK",   accent()),
+            CheckStatus::Warn => ("WARN", WARN_AMBER),
+            CheckStatus::Fail => ("FAIL", ERR_RED),
         };
-        ui.colored_label(color, format!("{prefix}  {}", item.label));
-        ui.label(egui::RichText::new(&item.detail).size(10.5).color(HINT_GRAY));
-        ui.add_space(6.0);
+        // Extra left margin leaves room for the colored rule painted after
+        // the frame closes (once its final `rect` is known) without needing
+        // a manual horizontal indent inside the content closure.
+        let resp = egui::Frame::none()
+            .fill(PANEL_BG)
+            .rounding(egui::Rounding::same(5.0))
+            .inner_margin(egui::Margin { left: 12.0, right: 8.0, top: 6.0, bottom: 6.0 })
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(prefix).size(9.5).monospace().strong().color(color));
+                    ui.label(egui::RichText::new(&item.label).size(11.5).color(egui::Color32::WHITE));
+                });
+                ui.label(egui::RichText::new(&item.detail).size(10.0).color(HINT_GRAY));
+            });
+        // Thin colored rule down the left edge instead of a full `Stroke`
+        // border, which draws on all four sides and would compete with the
+        // rounded card this list already sits inside — one edge is enough
+        // to color-code the row without a second nested border.
+        let rect = resp.response.rect;
+        ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(2.5_f32, color));
+        ui.add_space(5.0);
     }
 
     /// Shows what the last build log scan found — known error signatures

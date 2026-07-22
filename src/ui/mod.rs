@@ -43,6 +43,20 @@ impl eframe::App for DevToolApp {
         let is_busy = *self.is_working.lock().unwrap_or_else(|e| e.into_inner());
         self.status_display = self.status_message.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
+        // Pick up results from the background git-status / editor-running
+        // checks kicked off by `open_git_menu`/`refresh_git_status_async`
+        // and `open_package_config` — see those and `git_refresh_pending`'s
+        // doc comment for why these run off the UI thread instead of
+        // shelling out to `git`/`tasklist` synchronously on every tab
+        // switch.
+        if let Some((branch, status)) = self.git_refresh_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.git_current_branch = branch;
+            self.git_status         = status;
+        }
+        if let Some(running) = self.editor_check_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.editor_is_running = running;
+        }
+
         // Periodic update check. Once an update is found we stop polling.
         // `request_repaint_after` lets egui sleep until the next check is due
         // rather than painting every frame just to watch the clock.
@@ -95,9 +109,12 @@ impl eframe::App for DevToolApp {
                 // The op just changed the repo (new commit, new upstream
                 // ref, etc.) — refresh so the companion status panel
                 // doesn't show stale uncommitted/ahead-behind counts.
+                // Backgrounded like every other git-status refresh (see
+                // `refresh_git_status_async`'s doc comment) rather than
+                // calling `git` synchronously right as the busy view is
+                // about to hand back to idle.
                 if let Some(dir) = self.git_project_dir() {
-                    self.git_current_branch = crate::ops::git::git_current_branch(&dir);
-                    self.git_status         = crate::ops::git::git_status_summary(&dir);
+                    self.refresh_git_status_async(dir);
                 }
             }
 

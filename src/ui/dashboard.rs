@@ -30,16 +30,24 @@ impl DevToolApp {
         });
         ui.add_space(10.0);
 
+        // Wrapped in the same `card_frame()` every other section on this tab
+        // uses — as a bare default-styled button it had no border/rounding
+        // of its own and read as a stray control dropped between two
+        // bordered card rows rather than a third piece of the same layout.
         let have_project = self.project_path.is_some();
-        ui.add_enabled_ui(have_project, |ui| {
-            if ui.add_sized([ui.available_width(), 34.0], egui::Button::new("🔧  Rebuild Visual Studio Files")).clicked() {
-                self.open_vs_config();
+        card_frame().show(ui, |ui| {
+            ui.label(egui::RichText::new("🔧  BUILD TOOLS").size(11.0).color(HINT_GRAY));
+            ui.add_space(8.0);
+            ui.add_enabled_ui(have_project, |ui| {
+                if ui.add_sized([ui.available_width(), 34.0], egui::Button::new("🔧  Rebuild Visual Studio Files")).clicked() {
+                    self.open_vs_config();
+                }
+            });
+            if !have_project {
+                ui.add_space(4.0);
+                ui.colored_label(WARN_AMBER, "(!)  Set a project path above to enable build actions.");
             }
         });
-        if !have_project {
-            ui.add_space(4.0);
-            ui.colored_label(WARN_AMBER, "(!)  Set a project path above to enable build actions.");
-        }
         ui.add_space(10.0);
 
         ui.columns(2, |cols| {

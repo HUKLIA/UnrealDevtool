@@ -51,6 +51,11 @@ pub struct DevToolApp {
     pub use_custom_version:         bool,
     pub version_override:           String,
     pub editor_is_running:          bool,   // snapshotted when config panel opens
+    /// `is_editor_running()` shells out to `tasklist` — set on a background
+    /// thread by `open_package_config`, drained into `editor_is_running`
+    /// above on the next frame (see `update()`), same pattern as
+    /// `pc_check_disk` below.
+    pub editor_check_pending:       Arc<Mutex<Option<bool>>>,
     pub close_editor_before_package: bool,  // user toggle; default true (safe)
 
     // VS-rebuild pre-flight
@@ -89,6 +94,12 @@ pub struct DevToolApp {
     pub git_result:              Arc<Mutex<Option<GitTaskStatus>>>,
     pub git_current_branch:      String,
     pub git_status:              ops_git::GitStatusSummary,
+    /// `git_current_branch`/`git_status_summary` shell out to `git` up to
+    /// 7 times combined (status, log, rev-list, the 14-day activity log,
+    /// its `git var` timezone lookup, the working-tree diffstat) — set on a
+    /// background thread by `open_git_menu`, drained into the two fields
+    /// above on the next frame, same pattern as `pc_check_disk` below.
+    pub git_refresh_pending:     Arc<Mutex<Option<(String, ops_git::GitStatusSummary)>>>,
     pub git_merged_from:         String,
     pub git_commit_msg:          String,
     pub git_new_branch_name:     String,
@@ -228,6 +239,7 @@ impl DevToolApp {
             use_custom_version:          false,
             version_override:            String::new(),
             editor_is_running:           false,
+            editor_check_pending:        Arc::new(Mutex::new(None)),
             close_editor_before_package: true,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
@@ -253,6 +265,7 @@ impl DevToolApp {
             git_result:              Arc::new(Mutex::new(None)),
             git_current_branch:      String::new(),
             git_status:              ops_git::GitStatusSummary::default(),
+            git_refresh_pending:     Arc::new(Mutex::new(None)),
             git_merged_from:         String::new(),
             git_commit_msg:          String::new(),
             git_new_branch_name:     String::new(),
@@ -703,9 +716,20 @@ impl DevToolApp {
         // version; the user can tick "Custom" to keep/change it.
         self.version_override   = ops_package::format_version(self.next_version_preview);
         self.use_custom_version  = false;
-        // Snapshot whether the editor is running right now so the config panel
-        // can show the appropriate warning without calling tasklist every frame.
-        self.editor_is_running = ops_package::is_editor_running();
+        // `is_editor_running()` shells out to `tasklist` — spawning any
+        // process on the UI thread stalls the whole window until it
+        // returns (worse under real-time AV scanning of tasklist.exe), so
+        // this runs in the background and `editor_is_running` keeps
+        // whatever value it already had until the result lands (drained in
+        // `update()`). A one-frame-stale warning is a fine tradeoff for not
+        // freezing every switch to the Package tab.
+        *self.editor_check_pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let slot = Arc::clone(&self.editor_check_pending);
+        let ctx  = self.egui_ctx.clone();
+        thread::spawn(move || {
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(ops_package::is_editor_running());
+            ctx.request_repaint();
+        });
         self.show_vs_config      = false;
         self.git_state           = GitState::Idle;
     }
@@ -880,16 +904,31 @@ impl DevToolApp {
         self.git_commit_msg.clear();
         self.git_new_branch_name.clear();
         match self.git_project_dir() {
-            Some(d) => {
-                self.git_current_branch = ops_git::git_current_branch(&d);
-                self.git_status         = ops_git::git_status_summary(&d);
-            }
+            Some(d) => self.refresh_git_status_async(d),
             None => {
                 self.git_current_branch = "unknown".into();
                 self.git_status         = ops_git::GitStatusSummary::default();
             }
         }
         self.git_state = GitState::Menu;
+    }
+
+    /// Kicks off `git_current_branch` + `git_status_summary` on a
+    /// background thread; the result is picked up and applied to
+    /// `git_current_branch`/`git_status` on the next frame (see `update()`).
+    /// Between now and then those two fields keep showing whatever they last
+    /// held — stale by at most a frame or two, which is a fine tradeoff for
+    /// not blocking the UI thread on up to 7 sequential `git` subprocess
+    /// spawns (see `git_refresh_pending`'s doc comment for the full list).
+    pub fn refresh_git_status_async(&mut self, dir: PathBuf) {
+        let slot = Arc::clone(&self.git_refresh_pending);
+        let ctx  = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let branch = ops_git::git_current_branch(&dir);
+            let status = ops_git::git_status_summary(&dir);
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some((branch, status));
+            ctx.request_repaint();
+        });
     }
 
     pub fn git_start_commit_push(&mut self) {

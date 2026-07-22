@@ -107,16 +107,16 @@ pub fn run_checks(engine_dir: &Option<PathBuf>, project_path: &Option<PathBuf>) 
         }),
     }
 
+    // Detail text here is intentionally terse (just the offending path) —
+    // the full explanation and the one-click fix live in the amber callout
+    // `show_space_warning_inline` renders right below this list. Repeating
+    // the whole paragraph here too just doubled the same warning in two
+    // different visual styles back to back.
     if let Some(e) = engine_dir.as_ref().filter(|e| has_space(e)) {
         items.push(CheckItem {
             status: CheckStatus::Warn,
             label:  "Engine path has spaces".into(),
-            detail: format!(
-                "\"{}\" contains a space. Unreal's UAT/UBT batch scripts break on this \
-                 (it's why the default \"C:\\Program Files\\Epic Games\\...\" install trips people up) \
-                 — packaging can fail with a cryptic \"is not recognized\" error.",
-                e.display()
-            ),
+            detail: format!("{}  (see fix below)", e.display()),
         });
     }
 
@@ -124,7 +124,7 @@ pub fn run_checks(engine_dir: &Option<PathBuf>, project_path: &Option<PathBuf>) 
         items.push(CheckItem {
             status: CheckStatus::Warn,
             label:  "Project path has spaces".into(),
-            detail: format!("\"{}\" contains a space, which can also break UAT.", dir.display()),
+            detail: format!("{}  (see fix below)", dir.display()),
         });
     }
 
