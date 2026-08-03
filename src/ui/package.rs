@@ -1,7 +1,7 @@
 use eframe::egui;
 use crate::app::DevToolApp;
 use crate::theme::*;
-use crate::types::UploadAction;
+use crate::types::{BuildConfiguration, UploadAction};
 
 impl DevToolApp {
     pub fn show_upload_panel_ui(&mut self, ui: &mut egui::Ui) -> UploadAction {
@@ -234,6 +234,29 @@ impl DevToolApp {
                             .color(egui::Color32::from_rgb(220, 100, 100)),
                     );
                 }
+                ui.add_space(12.0);
+
+                ui.label(egui::RichText::new("Build configuration:").size(11.0).color(egui::Color32::GRAY));
+                ui.horizontal(|ui| {
+                    ui.radio_value(
+                        &mut self.build_configuration,
+                        BuildConfiguration::Development,
+                        "Development",
+                    );
+                    ui.radio_value(
+                        &mut self.build_configuration,
+                        BuildConfiguration::Shipping,
+                        "Shipping",
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(match self.build_configuration {
+                        BuildConfiguration::Development => "Debug-friendly build for testing.",
+                        BuildConfiguration::Shipping => "Optimized build for release.",
+                    })
+                    .size(10.0)
+                    .color(HINT_GRAY),
+                );
                 ui.add_space(12.0);
 
                 self.show_space_warning_inline(ui);

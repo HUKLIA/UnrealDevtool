@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::types::BuildConfiguration;
+
 /// Packages the Unreal project using UAT BuildCookRun.
 /// This function has many arguments by necessity (it runs on a background thread
 /// and receives all inputs by value so no shared references are needed).
@@ -14,6 +16,7 @@ pub fn package_game(
     pack_name:    String,
     exe_name:     String,
     version_str:  String,
+    configuration: BuildConfiguration,
     status:       Arc<Mutex<String>>,
     pending_zip:  Arc<Mutex<Option<PathBuf>>>,
     cancel:       Arc<AtomicBool>,
@@ -88,7 +91,8 @@ pub fn package_game(
         .arg("BuildCookRun")
         .arg(format!("-project={}", uproject_for_cmd.display()))
         .args(["-noP4", "-unattended", "-platform=Win64",
-               "-clientconfig=Development", "-serverconfig=Development",
+               &format!("-clientconfig={}", configuration.as_str()),
+               &format!("-serverconfig={}", configuration.as_str()),
                "-cook", "-allmaps", "-build", "-stage", "-pak", "-archive"])
         .arg(format!("-archivedirectory={}", archive_dir_for_cmd.display()))
         .stdout(log_stdout)

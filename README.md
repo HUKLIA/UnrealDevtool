@@ -39,6 +39,8 @@ Check PC Setup (and the config panels for Package/Rebuild VS Files) detect this 
 
 ## Package versions
 
+Choose **Development** for a debug-friendly test build or **Shipping** for an optimized release build. The last used choice is remembered per project and passed to Unreal's UAT client and server configuration flags.
+
 Versions auto-increment as `v0.0.1`, `v0.0.2`, … based on existing build folders. You can also enter a custom version before packaging. The version string is validated — it cannot be empty or contain characters that are illegal in Windows file names (`\ / : * ? " < > |`).
 
 ---

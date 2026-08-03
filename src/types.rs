@@ -6,6 +6,22 @@ pub enum IdeChoice {
     SkipOpen,
 }
 
+/// Unreal build configuration used by the packaging pipeline.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuildConfiguration {
+    Development,
+    Shipping,
+}
+
+impl BuildConfiguration {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "Development",
+            Self::Shipping => "Shipping",
+        }
+    }
+}
+
 /// Top-level tab. Drives the main tab bar and which tab's content
 /// `show_idle_view` routes to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

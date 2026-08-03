@@ -18,7 +18,7 @@ use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, update as ops_update, vs as ops_vs};
 use crate::ops::update::UpdateInfo;
 use crate::theme::apply_miku_theme;
-use crate::types::{AppTab, ExtrasTab, GitState, GitTaskStatus, IdeChoice};
+use crate::types::{AppTab, BuildConfiguration, ExtrasTab, GitState, GitTaskStatus, IdeChoice};
 use crate::webview::{WebPanel, WebViewManager};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -50,6 +50,7 @@ pub struct DevToolApp {
     pub next_version_preview:       u32,
     pub use_custom_version:         bool,
     pub version_override:           String,
+    pub build_configuration:        BuildConfiguration,
     pub editor_is_running:          bool,   // snapshotted when config panel opens
     /// `is_editor_running()` shells out to `tasklist` — set on a background
     /// thread by `open_package_config`, drained into `editor_is_running`
@@ -238,6 +239,7 @@ impl DevToolApp {
             next_version_preview:        1,
             use_custom_version:          false,
             version_override:            String::new(),
+            build_configuration:         BuildConfiguration::Development,
             editor_is_running:           false,
             editor_check_pending:        Arc::new(Mutex::new(None)),
             close_editor_before_package: true,
@@ -705,9 +707,10 @@ impl DevToolApp {
 
     pub fn open_package_config(&mut self) {
         let project_path = match &self.project_path { Some(p) => p.clone(), None => return };
-        let (pack, exe) = load_project_config(&project_path);
+        let (pack, exe, configuration) = load_project_config(&project_path);
         self.pack_name_input = pack;
         self.exe_name_input  = exe;
+        self.build_configuration = configuration;
         let build_dir = project_path.parent()
             .map(|p| p.join("build"))
             .unwrap_or_default();
@@ -758,7 +761,8 @@ impl DevToolApp {
             self.set_status("[ERROR] Invalid version — cannot be empty or contain \\ / : * ? \" < > |".into());
             return;
         }
-        save_project_config(&project_path, &pack_name, &exe_name);
+        let build_configuration = self.build_configuration;
+        save_project_config(&project_path, &pack_name, &exe_name, build_configuration);
         self.fast_package_mode  = false;
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
@@ -771,7 +775,7 @@ impl DevToolApp {
         let close_editor  = self.close_editor_before_package;
         let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
         });
     }
 
@@ -799,7 +803,8 @@ impl DevToolApp {
             self.set_status("[ERROR] Invalid version — cannot be empty or contain \\ / : * ? \" < > |".into());
             return;
         }
-        save_project_config(&project_path, &pack_name, &exe_name);
+        let build_configuration = self.build_configuration;
+        save_project_config(&project_path, &pack_name, &exe_name, build_configuration);
         self.fast_package_mode  = true;
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
@@ -812,7 +817,7 @@ impl DevToolApp {
         let close_editor  = self.close_editor_before_package;
         let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting fast UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
         });
     }
 

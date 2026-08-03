@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::types::BuildConfiguration;
+
 /// Base config directory: `%APPDATA%\UnrealDevTool\`
 pub fn config_dir() -> Option<PathBuf> {
     std::env::var("APPDATA")
@@ -54,15 +56,16 @@ pub fn clear_engine_path() {
 }
 
 // ── Per-project build config (`{stem}_build.cfg`) ────────────────────────────
-// Line 1: pack_name   (folder name + zip prefix)
-// Line 2: exe_name    (game exe is renamed to this)
+// Line 1: pack_name          (folder name + zip prefix)
+// Line 2: exe_name           (game exe is renamed to this)
+// Line 3: configuration      (Development or Shipping; missing = Development)
 
 pub fn project_config_file(project_path: &Path) -> Option<PathBuf> {
     let stem = project_path.file_stem()?.to_string_lossy().to_string();
     config_dir().map(|d| d.join(format!("{}_build.cfg", stem)))
 }
 
-pub fn load_project_config(project_path: &Path) -> (String, String) {
+pub fn load_project_config(project_path: &Path) -> (String, String, BuildConfiguration) {
     let default = project_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -74,15 +77,24 @@ pub fn load_project_config(project_path: &Path) -> (String, String) {
                 .map(str::to_string).unwrap_or_else(|| default.clone());
             let exe  = lines.next().filter(|s| !s.trim().is_empty())
                 .map(str::to_string).unwrap_or_else(|| default.clone());
-            return (pack, exe);
+            let configuration = match lines.next().map(str::trim) {
+                Some("Shipping") => BuildConfiguration::Shipping,
+                _ => BuildConfiguration::Development,
+            };
+            return (pack, exe, configuration);
         }
-    (default.clone(), default)
+    (default.clone(), default, BuildConfiguration::Development)
 }
 
-pub fn save_project_config(project_path: &Path, pack_name: &str, exe_name: &str) {
+pub fn save_project_config(
+    project_path: &Path,
+    pack_name: &str,
+    exe_name: &str,
+    configuration: BuildConfiguration,
+) {
     if let Some(cfg) = project_config_file(project_path) {
         if let Some(dir) = config_dir() { let _ = fs::create_dir_all(dir); }
-        let _ = fs::write(cfg, format!("{}\n{}", pack_name, exe_name));
+        let _ = fs::write(cfg, format!("{}\n{}\n{}", pack_name, exe_name, configuration.as_str()));
     }
 }
 
