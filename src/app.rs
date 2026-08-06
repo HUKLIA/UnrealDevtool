@@ -51,12 +51,22 @@ pub struct DevToolApp {
     pub use_custom_version:         bool,
     pub version_override:           String,
     pub build_configuration:        BuildConfiguration,
-    pub editor_is_running:          bool,   // snapshotted when config panel opens
+    pub editor_is_running:          bool,   // refreshed by `refresh_package_observed` (tab entry, periodic poll, task completion)
     /// `is_editor_running()` shells out to `tasklist` — set on a background
-    /// thread by `open_package_config`, drained into `editor_is_running`
+    /// thread by `refresh_package_observed`, drained into `editor_is_running`
     /// above on the next frame (see `update()`), same pattern as
     /// `pc_check_disk` below.
     pub editor_check_pending:       Arc<Mutex<Option<bool>>>,
+    /// `find_next_version()` does a `read_dir` over the build folder — set on
+    /// a background thread by `refresh_package_observed`, drained into
+    /// `next_version_preview` above on the next frame (see `update()`), same
+    /// pattern as `editor_check_pending` just above. Needed because
+    /// `refresh_package_observed` is now also called from the Package tab's
+    /// periodic poll (see `update()`'s tick block), not just on tab entry —
+    /// a `read_dir` blocking the UI thread once every couple of seconds
+    /// would be a regression of the exact class of bug this app already did
+    /// dedicated work to remove.
+    pub version_check_pending:      Arc<Mutex<Option<u32>>>,
     pub close_editor_before_package: bool,  // user toggle; default true (safe)
 
     // VS-rebuild pre-flight
@@ -98,8 +108,11 @@ pub struct DevToolApp {
     /// `git_current_branch`/`git_status_summary` shell out to `git` up to
     /// 7 times combined (status, log, rev-list, the 14-day activity log,
     /// its `git var` timezone lookup, the working-tree diffstat) — set on a
-    /// background thread by `open_git_menu`, drained into the two fields
-    /// above on the next frame, same pattern as `pc_check_disk` below.
+    /// background thread by `refresh_git_status_async` (called from
+    /// `open_git_menu`, after a git task finishes, and by the Git tab's
+    /// periodic poll in `update()` — see that method's doc comment), drained
+    /// into the two fields above on the next frame, same pattern as
+    /// `pc_check_disk` below.
     pub git_refresh_pending:     Arc<Mutex<Option<(String, ops_git::GitStatusSummary)>>>,
     pub git_merged_from:         String,
     pub git_commit_msg:          String,
@@ -168,6 +181,23 @@ pub struct DevToolApp {
     // Tabbed main layout
     pub active_tab: AppTab,
     pub extras_tab: ExtrasTab,
+
+    /// Last time the active tab's cheap "keep it live" poll ran (see
+    /// `update()`'s tick block). A single shared timer rather than
+    /// per-tab: `switch_tab` already does a full one-time refresh on
+    /// entry and resets this, so the only thing this timer paces is
+    /// "how long has the user been sitting on the current tab" —
+    /// switching tabs never needs to remember an older tab's countdown.
+    pub last_tab_poll:  Instant,
+    /// Separate, much longer-interval timer gating just the disk-space
+    /// check within the Dashboard tab's poll — see
+    /// `refresh_pc_check_disk_async`'s doc comment for why disk space
+    /// can't share the same cadence as the rest of that tab's checks.
+    pub last_disk_poll: Instant,
+    /// Same idea as `last_disk_poll`, for the Package tab's editor-running
+    /// check — see `refresh_editor_check_async`'s doc comment for why the
+    /// `tasklist` spawn can't share the version preview's 2s cadence.
+    pub last_editor_poll: Instant,
 
     // Boot/intro splash screen — shown once at launch, before the main UI.
     pub show_intro:       bool,
@@ -242,6 +272,7 @@ impl DevToolApp {
             build_configuration:         BuildConfiguration::Development,
             editor_is_running:           false,
             editor_check_pending:        Arc::new(Mutex::new(None)),
+            version_check_pending:       Arc::new(Mutex::new(None)),
             close_editor_before_package: true,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
@@ -307,6 +338,9 @@ impl DevToolApp {
             has_centered_window: false,
             active_tab: AppTab::Dashboard,
             extras_tab: ExtrasTab::Miku,
+            last_tab_poll:  Instant::now(),
+            last_disk_poll: Instant::now(),
+            last_editor_poll: Instant::now(),
             show_intro:       true,
             intro_started_at: None,
             intro_log:        Vec::new(),
@@ -403,6 +437,17 @@ impl DevToolApp {
             .filter(|p| is_valid_engine_dir(p))
             .or_else(|| detect_unreal_engine(self.project_path.as_deref()));
         self.refresh_status();
+        // Every caller of this function just changed which engine/project
+        // the app is pointed at (typing a new project path, Browse…, Clear
+        // override, Auto-detect) — without this, the Dashboard's PREFLIGHT
+        // DIAGNOSTICS card kept showing check results for whatever
+        // engine/project was active BEFORE the change until the user
+        // manually flipped tabs away and back to Dashboard. `refresh_pc_check`
+        // is already fully backgrounded for its one slow part (the
+        // disk-space PowerShell spawn), and every call site of
+        // `redetect_engine` is a discrete user action (a button click or a
+        // typed-path commit), never per-frame, so there's no spam risk.
+        self.refresh_pc_check();
     }
 
     /// Lets the user manually point at their Unreal Engine install folder —
@@ -504,6 +549,11 @@ impl DevToolApp {
             AppTab::Chat      => self.open_chat_panel(),
             AppTab::Extras    => {}
         }
+        // Every arm above already does a full one-time refresh of that
+        // tab's observed state on entry — reset the periodic-poll clock
+        // (see `update()`'s tick block) so it doesn't immediately fire
+        // again a frame later and redo the same work a second time.
+        self.last_tab_poll = Instant::now();
     }
 
     /// Scans a pasted log excerpt (Dashboard tab) against the same known-error
@@ -516,13 +566,42 @@ impl DevToolApp {
     // ── PC / environment pre-flight ──────────────────────────────────────────
 
     pub fn refresh_pc_check(&mut self) {
+        self.refresh_pc_check_cheap();
+        self.refresh_pc_check_disk_async();
+    }
+
+    /// The cheap half of `refresh_pc_check`: pure in-process path/string
+    /// checks (`ops::preflight::run_checks`) plus an on-disk build-log
+    /// rescan (`scan_last_build_log`, a couple of `read_dir`/`read_to_string`
+    /// calls) — no process spawn, so it's safe to call directly on the UI
+    /// thread as often as needed. Split out from the disk-space check below
+    /// specifically so the Dashboard tab's periodic poll (see `update()`'s
+    /// tick block) can keep this part live on a short interval without also
+    /// spawning a PowerShell process that often — see
+    /// `refresh_pc_check_disk_async` for why that half needs a much longer
+    /// leash.
+    pub fn refresh_pc_check_cheap(&mut self) {
         self.pc_check_items = crate::ops::preflight::run_checks(&self.engine_dir, &self.project_path);
         self.scan_last_build_log();
+    }
 
-        // Disk space needs a PowerShell spawn (slow, cold-start overhead) —
-        // running that on the UI thread would freeze the window until it
-        // returns, so it goes on a background thread like every other
-        // slow operation in this app.
+    /// The disk-space half of `refresh_pc_check`. Needs a PowerShell spawn
+    /// (slow, cold-start overhead) — running that on the UI thread would
+    /// freeze the window until it returns, so it goes on a background
+    /// thread like every other slow operation in this app.
+    ///
+    /// Kept separate from `refresh_pc_check_cheap` so callers that only
+    /// need the cheap checks refreshed (the periodic Dashboard poll) don't
+    /// also pay for a fresh PowerShell spawn on every tick — free disk
+    /// space essentially never changes meaningfully within a few seconds,
+    /// so spawning PowerShell that often would be pure waste. The poll
+    /// instead calls this on its own, much longer interval, gated by
+    /// `last_disk_poll`; that timer is reset *here* (not at the poll call
+    /// site) so it stays correct no matter which caller — tab entry, the
+    /// manual "Refresh" button, or the periodic poll — triggered this
+    /// particular check.
+    pub fn refresh_pc_check_disk_async(&mut self) {
+        self.last_disk_poll = Instant::now();
         *self.pc_check_disk.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()) {
             let slot = Arc::clone(&self.pc_check_disk);
@@ -707,34 +786,125 @@ impl DevToolApp {
 
     pub fn open_package_config(&mut self) {
         let project_path = match &self.project_path { Some(p) => p.clone(), None => return };
+        // User-owned fields: loaded fresh from disk on tab entry. This is a
+        // *load*, not a background refresh — it only ever runs here (and on
+        // the post-merge auto-open), never on a timer — so it can never
+        // clobber an in-progress edit the way calling this whole function
+        // on a timer would. See `refresh_package_observed` below for the
+        // half of this that's safe to re-run periodically.
         let (pack, exe, configuration) = load_project_config(&project_path);
         self.pack_name_input = pack;
         self.exe_name_input  = exe;
         self.build_configuration = configuration;
+
+        self.refresh_package_observed();
+        // Default the editable version field to the next auto-incremented
+        // version; the user can tick "Custom" to keep/change it. Seeded
+        // from whatever `next_version_preview` holds *right now* — which
+        // `refresh_package_observed` just kicked off a background
+        // recompute of, so this can momentarily be one frame stale (same
+        // tradeoff already accepted throughout this file, e.g.
+        // `editor_is_running` below). The visible auto-version label
+        // itself doesn't have this problem — it re-derives from
+        // `next_version_preview` fresh every frame (see
+        // `show_package_config_panel`), so it corrects on its own the
+        // instant the background check lands.
+        self.version_override   = ops_package::format_version(self.next_version_preview);
+        self.use_custom_version  = false;
+        self.show_vs_config      = false;
+        self.git_state           = GitState::Idle;
+    }
+
+    /// Recomputes ONLY the *observed* half of the Package tab's state — the
+    /// auto-incremented version preview and whether the editor is currently
+    /// running. Deliberately split out of `open_package_config`, which also
+    /// (re)loads the *user-owned* fields (pack/exe name, build
+    /// configuration) from disk: calling `open_package_config` on a timer
+    /// would silently overwrite whatever the user is mid-typing every time
+    /// it fired. Calling this instead is safe on a timer because it never
+    /// touches `pack_name_input`, `exe_name_input`, `version_override`,
+    /// `use_custom_version`, or `build_configuration`.
+    ///
+    /// This is also the actual fix for "packaging a second time fails with
+    /// a cryptic rename error": `next_version_preview` used to be set only
+    /// when the Package tab was *entered* (inside `open_package_config`),
+    /// so a build that finished while the user stayed on the tab kept
+    /// showing the version that was JUST built. Starting a second package
+    /// run then reused that same `build/v0.0.X/` folder, and
+    /// `fs::rename(&uat_windows, &target)` in `ops::package::package_game`
+    /// failed because the target already existed — only discovered after
+    /// the user waited out a full ~12 minute build. Called from `update()`'s
+    /// `just_finished` handling (so the version bumps the instant a package
+    /// completes) and from the Package tab's periodic poll while the tab
+    /// stays open (see `update()`'s tick block), in addition to
+    /// `open_package_config` above.
+    pub fn refresh_package_observed(&mut self) {
+        self.refresh_package_observed_version_only();
+        self.refresh_editor_check_async();
+    }
+
+    /// Just the version-preview half of [`refresh_package_observed`]. The
+    /// periodic Package-tab poll calls this every tick and throttles the
+    /// editor check separately, since only this half is cheap enough to run
+    /// at that cadence (see `refresh_editor_check_async`'s doc comment).
+    pub fn refresh_package_observed_version_only(&mut self) {
+        let Some(project_path) = self.project_path.clone() else { return };
         let build_dir = project_path.parent()
             .map(|p| p.join("build"))
             .unwrap_or_default();
-        self.next_version_preview = ops_package::find_next_version(&build_dir);
-        // Default the editable version field to the next auto-incremented
-        // version; the user can tick "Custom" to keep/change it.
-        self.version_override   = ops_package::format_version(self.next_version_preview);
-        self.use_custom_version  = false;
-        // `is_editor_running()` shells out to `tasklist` — spawning any
-        // process on the UI thread stalls the whole window until it
-        // returns (worse under real-time AV scanning of tasklist.exe), so
-        // this runs in the background and `editor_is_running` keeps
-        // whatever value it already had until the result lands (drained in
-        // `update()`). A one-frame-stale warning is a fine tradeoff for not
-        // freezing every switch to the Package tab.
-        *self.editor_check_pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let slot = Arc::clone(&self.editor_check_pending);
-        let ctx  = self.egui_ctx.clone();
+
+        // `find_next_version` does a `read_dir` over the build folder.
+        // Cheap in isolation, but this method is now also called from a
+        // timer tick (every ~2s while the Package tab is open) — running
+        // it synchronously on the UI thread would stall the window for
+        // that long on *every* tick instead of just once on tab entry.
+        // Same background-thread-plus-pending-slot pattern as
+        // `editor_check_pending` right below (and documented on
+        // `version_check_pending`'s field comment): computed off-thread,
+        // drained into `next_version_preview` at the top of `update()`.
+        *self.version_check_pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let version_slot = Arc::clone(&self.version_check_pending);
+        let version_ctx  = self.egui_ctx.clone();
         thread::spawn(move || {
-            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(ops_package::is_editor_running());
-            ctx.request_repaint();
+            let next = ops_package::find_next_version(&build_dir);
+            *version_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
+            version_ctx.request_repaint();
         });
-        self.show_vs_config      = false;
-        self.git_state           = GitState::Idle;
+    }
+
+    /// The "is the Unreal Editor open?" half of the Package tab's observed
+    /// state, split out of [`refresh_package_observed`] for the same reason
+    /// [`refresh_pc_check_disk_async`] is split out of the Dashboard's
+    /// checks: it is drastically more expensive than what it sits next to,
+    /// and needs nothing like the same refresh rate.
+    ///
+    /// `is_editor_running()` shells out to `tasklist` — and it checks two
+    /// executable names with a short-circuiting `any()`, so in the common
+    /// case (no editor open, which is exactly when the user is sitting here
+    /// configuring a build) it spawns *two* processes, not one. On the
+    /// Package tab's 2s poll that worked out to ~60 process spawns a
+    /// minute, every one of them scanned by real-time AV — the same kind of
+    /// spawn contention this app has already been bitten by elsewhere.
+    ///
+    /// Opening or closing the editor is a rare, deliberate user action, so
+    /// a 10s floor is imperceptible where a 2s one was wasteful. As with
+    /// `last_disk_poll`, the timer is reset *here* rather than at the poll
+    /// call site, so it stays correct regardless of which caller (tab
+    /// entry, task completion, or the periodic poll) triggered it.
+    ///
+    /// Runs in the background either way: spawning a process on the UI
+    /// thread stalls the whole window until it returns, and
+    /// `editor_is_running` simply keeps its previous value until the result
+    /// lands (drained in `update()`).
+    pub fn refresh_editor_check_async(&mut self) {
+        self.last_editor_poll = Instant::now();
+        *self.editor_check_pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let editor_slot = Arc::clone(&self.editor_check_pending);
+        let editor_ctx  = self.egui_ctx.clone();
+        thread::spawn(move || {
+            *editor_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(ops_package::is_editor_running());
+            editor_ctx.request_repaint();
+        });
     }
 
     pub fn start_packaging(&mut self) {
@@ -925,6 +1095,11 @@ impl DevToolApp {
     /// held — stale by at most a frame or two, which is a fine tradeoff for
     /// not blocking the UI thread on up to 7 sequential `git` subprocess
     /// spawns (see `git_refresh_pending`'s doc comment for the full list).
+    /// Called from `open_git_menu`, after a git task finishes (`update()`'s
+    /// `just_finished` handling), and from the Git tab's periodic poll
+    /// (`update()`'s tick block, every ~5s while that tab is open and the
+    /// app is idle) — all three just call this the same way, so there's
+    /// only one place that actually spawns the refresh.
     pub fn refresh_git_status_async(&mut self, dir: PathBuf) {
         let slot = Arc::clone(&self.git_refresh_pending);
         let ctx  = self.egui_ctx.clone();
@@ -1053,8 +1228,22 @@ impl DevToolApp {
 
     pub fn open_chat_panel(&mut self) {
         self.show_vs_config = false;
-        let have_any = !self.chat_providers.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
-        if !have_any { self.detect_chat_providers(); }
+        // Re-scan every time the Chat tab is (re-)entered, not just the
+        // first time this session. `chat_providers` is OBSERVED state — a
+        // local LLM server can be started or stopped by the user at any
+        // point outside this app — but this used to only auto-detect
+        // "if empty", so once any provider was found once, a server that
+        // was later closed kept showing as available (with a now-dead
+        // model list) until the user happened to notice and click the
+        // sidebar's manual ↻ button. `detect_chat_providers` already
+        // de-dupes overlapping calls via `chat_detecting` and uses a
+        // fail-fast 400ms-connect/2s-total timeout on each probe (see
+        // `probe_agent`), so re-running it on every entry is cheap and
+        // never blocks the UI thread — and since the sidebar keeps
+        // rendering the previous list until the refresh lands (see
+        // `show_chat_panel_ui`'s `providers.is_empty()` branch), this
+        // doesn't cause a loading flicker either.
+        self.detect_chat_providers();
     }
 
     /// Probes Ollama/LM Studio for reachability + available models on a

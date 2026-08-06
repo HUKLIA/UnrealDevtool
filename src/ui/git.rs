@@ -255,10 +255,13 @@ impl DevToolApp {
     /// adrift in empty space.
     ///
     /// Takes `&self`, not `&mut self`: this only ever reads `self.git_status`,
-    /// which is refreshed at its two actual call sites — `open_git_menu` in
-    /// app.rs and the git-task-finished handler in `ui::mod`'s `update` —
-    /// not here. Shelling out to git 60 times a second just to paint a panel
-    /// would be wasteful and would make the UI stutter on a slow disk/repo.
+    /// which is refreshed elsewhere — `open_git_menu` in app.rs, the
+    /// git-task-finished handler in `ui::mod`'s `update`, and that same
+    /// `update`'s periodic Git-tab poll (see its tick block, ~5s while the
+    /// tab is open) — never here. Shelling out to git 60 times a second
+    /// just to paint a panel would be wasteful and would make the UI
+    /// stutter on a slow disk/repo; even the periodic poll deliberately
+    /// stays far below that.
     pub fn show_git_status_panel(&self, ui: &mut egui::Ui) {
         Self::git_frame().show(ui, |ui| {
             ui.label(egui::RichText::new("📊  Repo Status").size(13.0).color(accent()));

@@ -56,6 +56,12 @@ impl eframe::App for DevToolApp {
         if let Some(running) = self.editor_check_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
             self.editor_is_running = running;
         }
+        // Picked up from `refresh_package_observed` (background `read_dir`
+        // over the build folder) — see `version_check_pending`'s field
+        // doc comment for why this can't just be set synchronously.
+        if let Some(next) = self.version_check_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.next_version_preview = next;
+        }
 
         // Periodic update check. Once an update is found we stop polling.
         // `request_repaint_after` lets egui sleep until the next check is due
@@ -88,6 +94,35 @@ impl eframe::App for DevToolApp {
                 a.set_speed(1.0);
             }
             self.fast_package_mode = false;
+
+            // The periodic per-tab poll below is gated on `!is_busy`, so
+            // `last_tab_poll` sits frozen for the whole duration of
+            // whatever just finished (packaging can run ~12+ minutes) —
+            // left alone, the *next* frame would see an `elapsed` of "12
+            // minutes and change", which is `>=` any of the poll
+            // intervals, and immediately fire a second, redundant poll of
+            // whichever tab is active on top of the unconditional refresh
+            // just below. Resetting here makes the periodic poll start its
+            // countdown fresh from "busy period just ended" instead.
+            // (Tab-switching is only possible from the idle view, so
+            // whichever tab was active when the busy period started is
+            // still the active one now — this reset is never wasted on a
+            // tab the user has since left.)
+            self.last_tab_poll = std::time::Instant::now();
+
+            // Any background task finishing can change what the Package tab
+            // should be showing — most obviously a packaging run itself
+            // (the version that was just built must not be offered again,
+            // see `refresh_package_observed`'s doc comment for the rename
+            // failure that caused), but also e.g. a VS-files rebuild or git
+            // op that closed/reopened the editor along the way. Called
+            // unconditionally here rather than gated on "was this task a
+            // package run specifically" — it's just two cheap background
+            // thread spawns (a `read_dir` and a `tasklist` call), and doing
+            // it unconditionally is simpler and can't miss a case. No-ops
+            // harmlessly if there's no project set.
+            self.refresh_package_observed();
+
             let git_status = self.git_result.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(gs) = git_status {
                 match gs {
@@ -133,6 +168,21 @@ impl eframe::App for DevToolApp {
                 self.upload_zip_path   = zip.clone();
                 self.upload_use_local  = false;
                 self.upload_use_gdrive = false;
+                // Force the "gdrive remote configured?" check (in
+                // `show_upload_panel_ui`) to re-run for this new build,
+                // instead of trusting whatever it found the *last* time the
+                // upload panel was shown this session. Without this, a user
+                // who sets up the "gdrive" remote for the first time (via
+                // the panel's own "Set up Google Drive remote…" button)
+                // between two packaging runs would still see the stale
+                // "No gdrive remote found" warning on the second build,
+                // even though it would now actually work — the panel
+                // already has a manual ↻ for re-checking mid-session, but
+                // there's no reason a fresh build shouldn't just start
+                // fresh too. `gdrive_remote_exists()` only reads rclone's
+                // local config file (no network), so re-checking here is
+                // cheap.
+                self.gdrive_remote_status = None;
                 if let Some(folder) = zip.parent() {
                     self.pending_open_folder_path = folder.to_path_buf();
                     self.show_open_folder_panel   = true;
@@ -157,6 +207,114 @@ impl eframe::App for DevToolApp {
             }
         }
         self.was_chat_busy = chat_busy_now;
+
+        // ── Periodic "keep the active tab's observed state live" tick ──────
+        //
+        // Makes the tabs dynamic. Without this, most of what a tab displays
+        // (git status, the package version preview, disk space, etc.) is
+        // only ever recomputed when that tab is first switched to (see
+        // `switch_tab`), so it visibly drifts out of date the longer the
+        // user sits on one tab without leaving it — see
+        // `refresh_package_observed`'s doc comment for the concrete bug
+        // that caused on the Package tab. This re-runs just the cheap,
+        // *observed* half of whichever tab is currently on screen (never
+        // the user-owned fields — see the "OBSERVED vs. USER-OWNED" split
+        // documented on the relevant refresh methods), on a short interval.
+        //
+        // Deliberate tradeoff: the app now wakes itself up on this interval
+        // instead of sleeping fully idle when nothing else is happening
+        // (egui is normally purely event-driven, painting only in response
+        // to input or an explicit `request_repaint`). A few background
+        // thread spawns every few seconds is a fair price for the tabs
+        // actually being live instead of frozen at whatever they showed on
+        // last entry.
+        //
+        // Gating:
+        //  - `!is_busy` — a packaging run has the UAT pipeline doing heavy
+        //    disk I/O; spawning extra git/tasklist/PowerShell processes
+        //    into that is exactly the kind of contention this app has
+        //    already been burned by (see `run_background_task`,
+        //    `refresh_git_status_async`'s doc comment). `show_intro` needs
+        //    no explicit check here — the early `return` at the top of this
+        //    function already skips everything below while it's showing.
+        //  - The global overlay panels (embedded web panel, the post-package
+        //    "open folder?" prompt, the upload panel, the upload-failure
+        //    fallback panel) aren't tab content — polling "the active tab"
+        //    while one of these covers the screen would refresh state the
+        //    user can't even see right now, for no benefit.
+        let overlay_open = self.active_web_panel.is_some()
+            || self.show_open_folder_panel
+            || self.show_upload_panel
+            || self.show_upload_fallback_panel;
+        if !is_busy && !overlay_open {
+            // Chat and Extras are intentionally absent (`None`): Chat's
+            // provider/model list already refreshes on tab entry and has
+            // its own manual ↻ button, and Extras' sub-panels are either
+            // static (Miku, Customize, Discord) or refresh on entry
+            // (App Self-Check) — none of them have a "the world changed
+            // out from under a value we cached" failure mode the way
+            // git status / package version / disk space do. See the task
+            // report for the full per-tab audit.
+            let interval = match self.active_tab {
+                AppTab::Package   => Some(std::time::Duration::from_secs(2)),
+                AppTab::Git       => Some(std::time::Duration::from_secs(5)),
+                AppTab::Dashboard => Some(std::time::Duration::from_secs(3)),
+                AppTab::Chat | AppTab::Extras => None,
+            };
+            if let Some(interval) = interval {
+                let elapsed = self.last_tab_poll.elapsed();
+                if elapsed >= interval {
+                    self.last_tab_poll = std::time::Instant::now();
+                    match self.active_tab {
+                        AppTab::Package => {
+                            // Version preview every tick — it's a single
+                            // `read_dir` and it's the whole reason this tab
+                            // needed to become live in the first place.
+                            self.refresh_package_observed_version_only();
+                            // The editor check spawns `tasklist` (twice, in
+                            // the common no-editor-open case), so it gets a
+                            // much longer floor of its own — see
+                            // `refresh_editor_check_async`'s doc comment.
+                            if self.last_editor_poll.elapsed() >= std::time::Duration::from_secs(10) {
+                                self.refresh_editor_check_async();
+                            }
+                        }
+                        AppTab::Git => {
+                            if let Some(dir) = self.git_project_dir() {
+                                self.refresh_git_status_async(dir);
+                            }
+                        }
+                        AppTab::Dashboard => {
+                            // Cheap part every tick: pure in-process
+                            // path/string checks plus an on-disk build-log
+                            // rescan, both already documented elsewhere as
+                            // safe to run on the UI thread (see
+                            // `ops::preflight::run_checks` and
+                            // `scan_last_build_log`).
+                            self.refresh_pc_check_cheap();
+                            // The disk-space check shells out to PowerShell
+                            // on *every* call (see `disk_space_check_item`'s
+                            // doc comment) — polling that on the same 3s
+                            // cadence would spawn a fresh PowerShell process
+                            // every 3 seconds the user sits on Dashboard,
+                            // which is wasteful and pointless (free disk
+                            // space essentially never changes meaningfully
+                            // that fast). Chose a much longer, independent
+                            // 20s floor for just this part instead of either
+                            // dropping its periodic refresh entirely or
+                            // paying the PowerShell-spawn cost every tick.
+                            if self.last_disk_poll.elapsed() >= std::time::Duration::from_secs(20) {
+                                self.refresh_pc_check_disk_async();
+                            }
+                        }
+                        AppTab::Chat | AppTab::Extras => {}
+                    }
+                    ctx.request_repaint_after(interval);
+                } else {
+                    ctx.request_repaint_after(interval - elapsed);
+                }
+            }
+        }
 
         self.pending_webview = None;
 
@@ -884,6 +1042,17 @@ impl DevToolApp {
                     self.project_path = None;
                     self.project_path_input.clear();
                     self.refresh_status();
+                    // This is the one project/engine-path mutation that
+                    // doesn't route through `redetect_engine` (there's no
+                    // engine redetection to do when clearing the project —
+                    // `engine_override`, if any, is untouched), which is
+                    // where `refresh_pc_check` normally gets triggered from.
+                    // Without this direct call, the PREFLIGHT DIAGNOSTICS
+                    // card on this same Dashboard tab kept showing checks
+                    // for the just-cleared project until the user manually
+                    // flipped tabs away and back. One-off button click, not
+                    // per-frame, so no spam risk.
+                    self.refresh_pc_check();
                 }
         });
 

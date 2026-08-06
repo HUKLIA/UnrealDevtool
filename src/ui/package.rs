@@ -197,18 +197,33 @@ impl DevToolApp {
                        && !self.exe_name_input.trim().is_empty()
                        && version_valid;
 
+        // Package name / exe name / build configuration are USER-OWNED
+        // state (see `refresh_package_observed`'s doc comment for the
+        // observed/user-owned split this whole tab is built around) — they
+        // used to be persisted only when the user actually clicked "Start
+        // Packaging"/"Fast Package" (`start_packaging`/`start_fast_packaging`
+        // in app.rs). That meant editing the package name, the exe name, or
+        // the Development/Shipping radio and then just switching tabs
+        // without packaging silently discarded the edit: `open_package_config`
+        // reloads these fields from disk on every re-entry to this tab, so
+        // the reload would win over whatever the user last typed. Saving on
+        // every actual change (not every frame — gated on `.changed()`)
+        // closes that gap, mirroring the existing save-on-change pattern in
+        // `ui::extras::show_quick_links` (`if changed { self.save_links(); }`).
+        let mut settings_changed = false;
+
         ui.columns(2, |cols| {
             card_frame().show(&mut cols[0], |ui| {
                 ui.label(egui::RichText::new("📦  Package Configuration").size(13.0).color(accent()));
                 ui.add_space(10.0);
 
                 ui.label(egui::RichText::new("Package / folder name:").size(11.0).color(egui::Color32::GRAY));
-                ui.add(egui::TextEdit::singleline(&mut self.pack_name_input).desired_width(f32::INFINITY));
+                settings_changed |= ui.add(egui::TextEdit::singleline(&mut self.pack_name_input).desired_width(f32::INFINITY)).changed();
                 ui.label(egui::RichText::new(&pack_preview).size(10.0).color(HINT_GRAY));
                 ui.add_space(8.0);
 
                 ui.label(egui::RichText::new("Executable name  (.exe):").size(11.0).color(egui::Color32::GRAY));
-                ui.add(egui::TextEdit::singleline(&mut self.exe_name_input).desired_width(f32::INFINITY));
+                settings_changed |= ui.add(egui::TextEdit::singleline(&mut self.exe_name_input).desired_width(f32::INFINITY)).changed();
                 ui.label(egui::RichText::new(&exe_preview).size(10.0).color(HINT_GRAY));
                 ui.add_space(8.0);
 
@@ -238,16 +253,16 @@ impl DevToolApp {
 
                 ui.label(egui::RichText::new("Build configuration:").size(11.0).color(egui::Color32::GRAY));
                 ui.horizontal(|ui| {
-                    ui.radio_value(
+                    settings_changed |= ui.radio_value(
                         &mut self.build_configuration,
                         BuildConfiguration::Development,
                         "Development",
-                    );
-                    ui.radio_value(
+                    ).changed();
+                    settings_changed |= ui.radio_value(
                         &mut self.build_configuration,
                         BuildConfiguration::Shipping,
                         "Shipping",
-                    );
+                    ).changed();
                 });
                 ui.label(
                     egui::RichText::new(match self.build_configuration {
@@ -322,6 +337,25 @@ impl DevToolApp {
                 });
             });
         });
+
+        // Persist the moment any of the four fields above actually change
+        // (see the comment on `settings_changed`'s declaration) rather than
+        // only when the user clicks Start/Fast Package — `.changed()` only
+        // fires on the frame a value is edited, so this never writes the
+        // config file on frames where nothing happened. `self.project_path`
+        // is guaranteed `Some` here in practice (the caller, `show_package_tab`,
+        // already bails out before reaching this panel when it's `None`),
+        // but re-checking rather than assuming keeps this function safe to
+        // call on its own regardless of that caller invariant.
+        if settings_changed && let Some(project_path) = self.project_path.clone() {
+            crate::config::save_project_config(
+                &project_path,
+                self.pack_name_input.trim(),
+                self.exe_name_input.trim(),
+                self.build_configuration,
+            );
+        }
+
         action
     }
 
