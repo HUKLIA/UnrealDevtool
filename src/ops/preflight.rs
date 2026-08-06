@@ -32,7 +32,28 @@ fn link_root(same_drive_as: &Path) -> Option<PathBuf> {
     }
     candidates.into_iter()
         .filter(|c| !has_space(c))
-        .find(|c| c.exists() || std::fs::create_dir_all(c).is_ok())
+        .find(|c| c.is_dir() || std::fs::create_dir_all(c).is_ok())
+}
+
+fn alias_name(target: &Path) -> String {
+    let base = target
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| std::borrow::Cow::Borrowed("link"));
+    let safe_base: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in target.to_string_lossy().to_ascii_lowercase().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3_u64);
+    }
+    format!("{}-{:016x}", safe_base.trim_matches('_'), hash)
+}
+
+fn aliases_target(link: &Path, target: &Path) -> bool {
+    std::fs::canonicalize(link).ok() == std::fs::canonicalize(target).ok()
 }
 
 /// Ensures a space-free directory junction exists pointing at `target` and
@@ -42,14 +63,34 @@ fn link_root(same_drive_as: &Path) -> Option<PathBuf> {
 pub fn ensure_space_free_alias(target: &Path) -> Result<PathBuf, String> {
     if !has_space(target) { return Ok(target.to_path_buf()); }
 
+    if !target.is_dir() {
+        return Err(format!("target folder does not exist: {}", target.display()));
+    }
+
     let root = link_root(target)
         .ok_or_else(|| "couldn't find a writable space-free folder to link from".to_string())?;
-    let name = target.file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "link".to_string());
-    let link = root.join(&name);
+    let legacy_link = target.file_name().map(|n| root.join(n));
+    if let Some(link) = &legacy_link
+        && link.is_dir()
+        && !has_space(link)
+        && aliases_target(link, target)
+    {
+        return Ok(link.clone());
+    }
 
-    if link.exists() { return Ok(link); }
+    // Include a stable target hash so two projects with the same folder name
+    // cannot accidentally reuse one another's junction.
+    let link = root.join(alias_name(target));
+
+    if link.exists() {
+        if aliases_target(&link, target) {
+            return Ok(link);
+        }
+        return Err(format!(
+            "space-free link already exists and points elsewhere: {}",
+            link.display()
+        ));
+    }
 
     let status = crate::ops::cmd("cmd")
         .arg("/c").arg("mklink").arg("/J")
@@ -165,4 +206,23 @@ fn free_space_gb(path: &Path) -> Option<f64> {
         .ok()?;
     let bytes: f64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
     Some(bytes / 1_073_741_824.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_spaces_without_treating_clean_paths_as_links() {
+        assert!(has_space(Path::new(r"C:\Program Files\Epic Games")));
+        assert!(!has_space(Path::new(r"C:\UEDevToolLink\UE_5.4")));
+    }
+
+    #[test]
+    fn alias_names_are_space_free_and_target_specific() {
+        let a = alias_name(Path::new(r"C:\Games\My Project"));
+        let b = alias_name(Path::new(r"D:\Games\My Project"));
+        assert!(!a.contains(' '));
+        assert_ne!(a, b);
+    }
 }

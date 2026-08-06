@@ -66,7 +66,7 @@ pub fn git_status_summary(dir: &Path) -> GitStatusSummary {
 
     let (ok, out) = run_git(dir, &["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
     let ahead_behind = if ok {
-        let parts: Vec<&str> = out.trim().split_whitespace().collect();
+        let parts: Vec<&str> = out.split_whitespace().collect();
         match (parts.first().and_then(|s| s.parse().ok()), parts.get(1).and_then(|s| s.parse().ok())) {
             (Some(behind), Some(ahead)) => Some((ahead, behind)),
             _ => None,
@@ -170,7 +170,7 @@ fn local_today_days(dir: &Path) -> Option<i64> {
     // Parse from the right: the name/email prefix is free-form and may
     // itself contain spaces, but the timestamp and offset are always the
     // final two fields.
-    let fields: Vec<&str> = out.trim().split_whitespace().collect();
+    let fields: Vec<&str> = out.split_whitespace().collect();
     let parsed = match (fields.len() >= 2, fields.last(), fields.get(fields.len().wrapping_sub(2))) {
         (true, Some(offset), Some(ts)) => {
             let secs: i64 = match ts.parse() {

@@ -183,8 +183,18 @@ impl DevToolApp {
         } else {
             auto_version_label.clone()
         };
-        let version_valid = !version_label.is_empty()
-            && !version_label.chars().any(|c| "\\/:*?\"<>|".contains(c));
+        let version_error = crate::ops::package::validate_leaf_name(&version_label, "Version").err();
+        let version_valid = version_error.is_none();
+        let pack_name_error = crate::ops::package::validate_leaf_name(
+            &self.pack_name_input,
+            "Package name",
+        )
+        .err();
+        let exe_name_error = crate::ops::package::validate_leaf_name(
+            &self.exe_name_input,
+            "Executable name",
+        )
+        .err();
         let pack_preview  = format!(
             "-> build/{}/{}/   and   {}_{}.zip",
             version_label,
@@ -193,9 +203,7 @@ impl DevToolApp {
             version_label,
         );
         let exe_preview = format!("-> {}.exe", self.exe_name_input.trim());
-        let can_start   = !self.pack_name_input.trim().is_empty()
-                       && !self.exe_name_input.trim().is_empty()
-                       && version_valid;
+        let can_start   = pack_name_error.is_none() && exe_name_error.is_none() && version_valid;
 
         // Package name / exe name / build configuration are USER-OWNED
         // state (see `refresh_package_observed`'s doc comment for the
@@ -220,11 +228,17 @@ impl DevToolApp {
                 ui.label(egui::RichText::new("Package / folder name:").size(11.0).color(egui::Color32::GRAY));
                 settings_changed |= ui.add(egui::TextEdit::singleline(&mut self.pack_name_input).desired_width(f32::INFINITY)).changed();
                 ui.label(egui::RichText::new(&pack_preview).size(10.0).color(HINT_GRAY));
+                if let Some(error) = &pack_name_error {
+                    ui.colored_label(ERR_RED, error);
+                }
                 ui.add_space(8.0);
 
                 ui.label(egui::RichText::new("Executable name  (.exe):").size(11.0).color(egui::Color32::GRAY));
                 settings_changed |= ui.add(egui::TextEdit::singleline(&mut self.exe_name_input).desired_width(f32::INFINITY)).changed();
                 ui.label(egui::RichText::new(&exe_preview).size(10.0).color(HINT_GRAY));
+                if let Some(error) = &exe_name_error {
+                    ui.colored_label(ERR_RED, error);
+                }
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
@@ -242,12 +256,8 @@ impl DevToolApp {
                         self.version_override = auto_version_label.clone();
                     }
                 });
-                if self.use_custom_version && !version_valid {
-                    ui.label(
-                        egui::RichText::new("Version cannot be empty or contain \\ / : * ? \" < > |")
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(220, 100, 100)),
-                    );
+                if self.use_custom_version && let Some(error) = &version_error {
+                    ui.colored_label(ERR_RED, error);
                 }
                 ui.add_space(12.0);
 
@@ -288,28 +298,14 @@ impl DevToolApp {
                             ui.add_space(4.0);
                             ui.label(
                                 egui::RichText::new(
-                                    "Packaging with the editor open is possible, but may fail if:\n\
-                                     •  You have unsaved assets (they won't be included in the build)\n\
-                                     •  Live Coding or auto-compile is active (write conflict on Intermediate/)\n\n\
-                                     Save all your work first (Ctrl+S in the editor), then choose below."
+                                    "The editor will be closed automatically before packaging.\n\
+                                     Save all your work first (Ctrl+S in the editor), then start the build."
                                 ).size(10.5).color(egui::Color32::from_rgb(210, 190, 140)),
                             );
-                            ui.add_space(6.0);
-                            ui.checkbox(
-                                &mut self.close_editor_before_package,
-                                egui::RichText::new("Close the editor automatically before packaging  (recommended)")
-                                    .size(11.5)
-                                    .color(egui::Color32::WHITE),
-                            );
-                            if !self.close_editor_before_package {
-                                ui.add_space(2.0);
-                                ui.colored_label(
-                                    WARN_AMBER,
-                                    "The editor will stay open. Save everything before starting.",
-                                );
-                            }
                         });
                     ui.add_space(8.0);
+                } else {
+                    ui.colored_label(accent(), "Unreal Editor will be closed before packaging.");
                 }
             });
 

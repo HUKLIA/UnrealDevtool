@@ -384,7 +384,7 @@ fn paint_background_decoration(ui: &egui::Ui) {
     let glow_center = rect.left_top() + egui::vec2(140.0, 90.0);
     for i in 0..7 {
         let radius = 40.0 + i as f32 * 34.0;
-        let alpha  = 10 - i * 1;
+        let alpha  = 10 - i;
         painter.circle_filled(glow_center, radius, egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha));
     }
 }
@@ -1030,10 +1030,16 @@ impl DevToolApp {
                     .set_title("Select your .uproject file")
                     .pick_file()
                 {
-                    save_project_path(&path);
-                    self.project_path_input = path.to_string_lossy().to_string();
-                    self.project_path       = Some(path);
-                    self.redetect_engine();
+                    if path.is_file()
+                        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("uproject"))
+                    {
+                        save_project_path(&path);
+                        self.project_path_input = path.to_string_lossy().to_string();
+                        self.project_path       = Some(path);
+                        self.redetect_engine();
+                    } else {
+                        self.set_status("[ERROR] Select an existing .uproject file.".into());
+                    }
                 }
 
             if has_path
@@ -1041,18 +1047,7 @@ impl DevToolApp {
                     clear_project_path();
                     self.project_path = None;
                     self.project_path_input.clear();
-                    self.refresh_status();
-                    // This is the one project/engine-path mutation that
-                    // doesn't route through `redetect_engine` (there's no
-                    // engine redetection to do when clearing the project —
-                    // `engine_override`, if any, is untouched), which is
-                    // where `refresh_pc_check` normally gets triggered from.
-                    // Without this direct call, the PREFLIGHT DIAGNOSTICS
-                    // card on this same Dashboard tab kept showing checks
-                    // for the just-cleared project until the user manually
-                    // flipped tabs away and back. One-off button click, not
-                    // per-frame, so no spam risk.
-                    self.refresh_pc_check();
+                    self.redetect_engine();
                 }
         });
 

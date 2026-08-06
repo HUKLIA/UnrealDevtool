@@ -13,6 +13,8 @@ pub enum LlmProvider {
     LmStudio,
 }
 
+pub type ChatProviders = Vec<(LlmProvider, Vec<String>)>;
+
 impl LlmProvider {
     fn base_url(self) -> &'static str {
         match self {
@@ -48,7 +50,7 @@ fn probe_agent() -> ureq::Agent {
 /// Detects which local LLM servers are reachable right now and what models
 /// each has available. Meant to run on a background thread — even a
 /// localhost network call shouldn't happen on the UI thread.
-pub fn detect_providers() -> Vec<(LlmProvider, Vec<String>)> {
+pub fn detect_providers() -> ChatProviders {
     let mut found = Vec::new();
     if let Some(models) = list_models(LlmProvider::Ollama)   { found.push((LlmProvider::Ollama, models)); }
     if let Some(models) = list_models(LlmProvider::LmStudio) { found.push((LlmProvider::LmStudio, models)); }

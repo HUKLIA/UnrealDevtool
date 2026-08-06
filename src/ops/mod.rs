@@ -8,6 +8,7 @@ pub mod selfcheck;
 pub mod update;
 pub mod vs;
 
+use std::path::Path;
 use std::process::Command;
 
 /// Returns a `Command` with `CREATE_NO_WINDOW` set so no black console popup
@@ -18,6 +19,16 @@ pub fn cmd(program: &str) -> Command {
     let mut c = Command::new(program);
     c.creation_flags(CREATE_NO_WINDOW);
     c
+}
+
+/// Creates a command that invokes a Windows batch file and preserves paths
+/// containing spaces. `call` is important here: without it, `cmd /c` can
+/// parse a quoted batch-file path as the whole command and drop the remaining
+/// arguments on some Windows versions.
+pub fn batch_cmd(script: &Path) -> Command {
+    let mut command = cmd("cmd");
+    command.args(["/d", "/c", "call"]).arg(script);
+    command
 }
 
 /// Opens `url` in the user's default browser via the OS URI handler.

@@ -67,7 +67,6 @@ pub struct DevToolApp {
     /// would be a regression of the exact class of bug this app already did
     /// dedicated work to remove.
     pub version_check_pending:      Arc<Mutex<Option<u32>>>,
-    pub close_editor_before_package: bool,  // user toggle; default true (safe)
 
     // VS-rebuild pre-flight
     pub show_vs_config: bool,
@@ -157,7 +156,7 @@ pub struct DevToolApp {
     // Dev-assistant chat (local LLM via Ollama / LM Studio)
     pub chat_history:    Vec<crate::ops::llm::ChatMessage>,
     pub chat_input:      String,
-    pub chat_providers:  Arc<Mutex<Vec<(crate::ops::llm::LlmProvider, Vec<String>)>>>,
+    pub chat_providers:  Arc<Mutex<crate::ops::llm::ChatProviders>>,
     pub chat_detecting:  Arc<Mutex<bool>>,
     pub chat_provider:   Option<crate::ops::llm::LlmProvider>,
     pub chat_model:      String,
@@ -273,7 +272,6 @@ impl DevToolApp {
             editor_is_running:           false,
             editor_check_pending:        Arc::new(Mutex::new(None)),
             version_check_pending:       Arc::new(Mutex::new(None)),
-            close_editor_before_package: true,
             show_vs_config:       false,
             ide_choice:           IdeChoice::Rider,
             use_space_free_link:  false,
@@ -418,6 +416,11 @@ impl DevToolApp {
             save_project_path(&p);
             self.project_path = Some(p);
             self.redetect_engine();
+        } else {
+            self.set_status("[ERROR] Select an existing .uproject file.".into());
+            if let Some(current) = &self.project_path {
+                self.project_path_input = current.to_string_lossy().to_string();
+            }
         }
     }
 
@@ -626,19 +629,17 @@ impl DevToolApp {
     pub fn apply_space_free_fix(&mut self) {
         if let Some(engine) = self.engine_dir.clone()
             && crate::ops::preflight::has_space(&engine)
+            && let Err(e) = crate::ops::preflight::ensure_space_free_alias(&engine)
         {
-            if let Err(e) = crate::ops::preflight::ensure_space_free_alias(&engine) {
-                self.set_status(format!("[ERROR] {e}"));
-                return;
-            }
+            self.set_status(format!("[ERROR] {e}"));
+            return;
         }
         if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf())
             && crate::ops::preflight::has_space(&dir)
+            && let Err(e) = crate::ops::preflight::ensure_space_free_alias(&dir)
         {
-            if let Err(e) = crate::ops::preflight::ensure_space_free_alias(&dir) {
-                self.set_status(format!("[ERROR] {e}"));
-                return;
-            }
+            self.set_status(format!("[ERROR] {e}"));
+            return;
         }
         self.use_space_free_link = true;
         self.set_status("[OK] Space-free link ready — packaging will route through it from now on.".into());
@@ -909,6 +910,10 @@ impl DevToolApp {
 
     pub fn start_packaging(&mut self) {
         let project_path = match self.project_path.clone() { Some(p) => p, None => return };
+        if !project_path.is_file() {
+            self.set_status(format!("[ERROR] Project file not found: {}", project_path.display()));
+            return;
+        }
         let engine_dir   = match self.engine_dir.clone() {
             Some(e) => e,
             None    => {
@@ -916,10 +921,18 @@ impl DevToolApp {
                 return;
             }
         };
+        if !is_valid_engine_dir(&engine_dir) {
+            self.set_status(format!("[ERROR] Invalid Unreal Engine folder: {}", engine_dir.display()));
+            return;
+        }
         let pack_name = self.pack_name_input.trim().to_string();
         let exe_name  = self.exe_name_input.trim().to_string();
-        if pack_name.is_empty() || exe_name.is_empty() {
-            self.set_status("[ERROR] Names cannot be empty.".into());
+        if let Err(e) = ops_package::validate_leaf_name(&self.pack_name_input, "Package name") {
+            self.set_status(format!("[ERROR] {e}"));
+            return;
+        }
+        if let Err(e) = ops_package::validate_leaf_name(&self.exe_name_input, "Executable name") {
+            self.set_status(format!("[ERROR] {e}"));
             return;
         }
         let version_str = if self.use_custom_version {
@@ -927,8 +940,8 @@ impl DevToolApp {
         } else {
             ops_package::format_version(self.next_version_preview)
         };
-        if version_str.is_empty() || version_str.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
-            self.set_status("[ERROR] Invalid version — cannot be empty or contain \\ / : * ? \" < > |".into());
+        if let Err(e) = ops_package::validate_leaf_name(&version_str, "Version") {
+            self.set_status(format!("[ERROR] {e}"));
             return;
         }
         let build_configuration = self.build_configuration;
@@ -942,15 +955,18 @@ impl DevToolApp {
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
-        let close_editor  = self.close_editor_before_package;
         let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, use_space_free_link)
         });
     }
 
     pub fn start_fast_packaging(&mut self) {
         let project_path = match self.project_path.clone() { Some(p) => p, None => return };
+        if !project_path.is_file() {
+            self.set_status(format!("[ERROR] Project file not found: {}", project_path.display()));
+            return;
+        }
         let engine_dir   = match self.engine_dir.clone() {
             Some(e) => e,
             None    => {
@@ -958,10 +974,18 @@ impl DevToolApp {
                 return;
             }
         };
+        if !is_valid_engine_dir(&engine_dir) {
+            self.set_status(format!("[ERROR] Invalid Unreal Engine folder: {}", engine_dir.display()));
+            return;
+        }
         let pack_name = self.pack_name_input.trim().to_string();
         let exe_name  = self.exe_name_input.trim().to_string();
-        if pack_name.is_empty() || exe_name.is_empty() {
-            self.set_status("[ERROR] Names cannot be empty.".into());
+        if let Err(e) = ops_package::validate_leaf_name(&self.pack_name_input, "Package name") {
+            self.set_status(format!("[ERROR] {e}"));
+            return;
+        }
+        if let Err(e) = ops_package::validate_leaf_name(&self.exe_name_input, "Executable name") {
+            self.set_status(format!("[ERROR] {e}"));
             return;
         }
         let version_str = if self.use_custom_version {
@@ -969,8 +993,8 @@ impl DevToolApp {
         } else {
             ops_package::format_version(self.next_version_preview)
         };
-        if version_str.is_empty() || version_str.chars().any(|c| "\\/:*?\"<>|".contains(c)) {
-            self.set_status("[ERROR] Invalid version — cannot be empty or contain \\ / : * ? \" < > |".into());
+        if let Err(e) = ops_package::validate_leaf_name(&version_str, "Version") {
+            self.set_status(format!("[ERROR] {e}"));
             return;
         }
         let build_configuration = self.build_configuration;
@@ -984,10 +1008,9 @@ impl DevToolApp {
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
-        let close_editor  = self.close_editor_before_package;
         let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting fast UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, close_editor, use_space_free_link)
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, use_space_free_link)
         });
     }
 
@@ -1051,6 +1074,11 @@ impl DevToolApp {
 
     pub fn start_vs_rebuild(&mut self) {
         let project_path = match self.project_path.clone() { Some(p) => p, None => return };
+        if !project_path.is_file() {
+            self.set_status(format!("[ERROR] Project file not found: {}", project_path.display()));
+            self.show_vs_config = false;
+            return;
+        }
         let engine_dir   = match self.engine_dir.clone() {
             Some(e) => e,
             None    => {
@@ -1059,6 +1087,11 @@ impl DevToolApp {
                 return;
             }
         };
+        if !is_valid_engine_dir(&engine_dir) {
+            self.set_status(format!("[ERROR] Invalid Unreal Engine folder: {}", engine_dir.display()));
+            self.show_vs_config = false;
+            return;
+        }
         let ide = self.ide_choice;
         self.show_vs_config = false;
         self.busy_label = "[ GENERATING PROJECT FILES ]".into();

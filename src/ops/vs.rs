@@ -26,37 +26,16 @@ pub fn rebuild_vs_files(
         None    => return "[ERROR] Bad project path.".into(),
     };
 
-    // ── Step 1: clean ─────────────────────────────────────────────────────────
-    const CLEAN_DIRS: &[&str] = &[
-        "Binaries", "Intermediate", "Saved", ".idea", ".vs", "DerivedDataCache",
-    ];
-    prog!(0.02);
-    upd!("[1/3] Cleaning generated files…");
-    let total_clean = CLEAN_DIRS.len() as f32;
-    for (i, name) in CLEAN_DIRS.iter().enumerate() {
-        let p = project_dir.join(name);
-        if p.exists() {
-            upd!(format!("[1/3] Removing {}…", name));
-            let _ = fs::remove_dir_all(&p);
-        }
-        prog!(0.02 + (i as f32 + 1.0) / total_clean * 0.23);
-    }
-    if let Ok(entries) = fs::read_dir(&project_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sln")) {
-                upd!(format!("[1/3] Removing {}…",
-                    path.file_name().unwrap_or_default().to_string_lossy()));
-                let _ = fs::remove_file(&path);
-            }
-        }
+    if !uproject.is_file() {
+        return format!("[ERROR] Project file not found: {}", uproject.display());
     }
 
-    // ── Step 2: generate ──────────────────────────────────────────────────────
-    // Same UAT/UBT space-in-path bug as packaging (see ops::package): the
-    // engine's own batch scripts break on a space anywhere in the invoked
-    // path — most commonly the default "C:\Program Files\Epic Games\..."
-    // install. Route through the space-free alias here too when requested.
+    // Resolve the command paths before deleting anything. A bad engine path
+    // should never leave the project without its existing solution or build
+    // intermediates.
+    let use_space_free_link = use_space_free_link
+        || crate::ops::preflight::has_space(&engine)
+        || crate::ops::preflight::has_space(&project_dir);
     let (engine_for_cmd, project_dir_for_cmd) = if use_space_free_link {
         let engine_alias = match crate::ops::preflight::ensure_space_free_alias(&engine) {
             Ok(p)  => p,
@@ -74,22 +53,53 @@ pub fn rebuild_vs_files(
 
     let gpf_bat   = engine_for_cmd.join("Engine\\Build\\BatchFiles\\GenerateProjectFiles.bat");
     let build_bat = engine_for_cmd.join("Engine\\Build\\BatchFiles\\Build.bat");
-
-    check!();
-    let log_path = project_dir.join("GenerateProjectFiles.log");
-
-    let (bat_path, bat_args): (&PathBuf, &[&str]) = if gpf_bat.exists() {
-        upd!("[2/3] Running GenerateProjectFiles.bat…");
-        (&gpf_bat, &["-game", "-rocket", "-progress"])
-    } else if build_bat.exists() {
-        upd!("[2/3] Running Build.bat -ProjectFiles…");
-        (&build_bat, &["-ProjectFiles", "-game", "-rocket", "-progress"])
+    let (bat_path, bat_args, generator_label): (&PathBuf, &[&str], &str) = if gpf_bat.is_file() {
+        (&gpf_bat, &["-game", "-rocket", "-progress"], "GenerateProjectFiles.bat")
+    } else if build_bat.is_file() {
+        (&build_bat, &["-ProjectFiles", "-game", "-rocket", "-progress"], "Build.bat -ProjectFiles")
     } else {
         return format!(
-            "[ERROR] No generator bat found in:\n{}",
+            "[ERROR] No project-file generator found in:\n{}",
             engine_for_cmd.join("Engine\\Build\\BatchFiles").display()
         );
     };
+
+    // ── Step 1: clean ─────────────────────────────────────────────────────────
+    const CLEAN_DIRS: &[&str] = &[
+        "Binaries", "Intermediate", "Saved", ".idea", ".vs", "DerivedDataCache",
+    ];
+    prog!(0.02);
+    upd!("[1/3] Cleaning generated files…");
+    let total_clean = CLEAN_DIRS.len() as f32;
+    for (i, name) in CLEAN_DIRS.iter().enumerate() {
+        check!();
+        let p = project_dir.join(name);
+        if p.exists() {
+            upd!(format!("[1/3] Removing {}…", name));
+            if let Err(e) = fs::remove_dir_all(&p) {
+                return format!("[ERROR] Could not remove {}: {}", p.display(), e);
+            }
+        }
+        prog!(0.02 + (i as f32 + 1.0) / total_clean * 0.23);
+    }
+    if let Ok(entries) = fs::read_dir(&project_dir) {
+        for entry in entries.flatten() {
+            check!();
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sln")) {
+                upd!(format!("[1/3] Removing {}…",
+                    path.file_name().unwrap_or_default().to_string_lossy()));
+                if let Err(e) = fs::remove_file(&path) {
+                    return format!("[ERROR] Could not remove {}: {}", path.display(), e);
+                }
+            }
+        }
+    }
+
+    // ── Step 2: generate ──────────────────────────────────────────────────────
+    check!();
+    let log_path = project_dir.join("GenerateProjectFiles.log");
+    upd!(format!("[2/3] Running {generator_label}…"));
 
     let log_out = match fs::File::create(&log_path) {
         Ok(f)  => f,
@@ -100,8 +110,7 @@ pub fn rebuild_vs_files(
         Err(e) => return format!("[ERROR] Clone log handle: {}", e),
     };
 
-    let mut gen_child = match crate::ops::cmd("cmd")
-        .args(["/c", &bat_path.to_string_lossy()])
+    let mut gen_child = match crate::ops::batch_cmd(bat_path)
         .arg(format!("-project={}", uproject_for_cmd.display()))
         .args(bat_args)
         .stdout(log_out)
@@ -203,7 +212,8 @@ pub fn scan_for_rider(base: &Path) -> Option<PathBuf> {
     for d1 in fs::read_dir(base).ok()?.flatten() {
         let c1 = d1.path().join("bin").join("rider64.exe");
         if c1.exists() { return Some(c1); }
-        for d2 in fs::read_dir(d1.path()).ok()?.flatten() {
+        let Ok(children) = fs::read_dir(d1.path()) else { continue };
+        for d2 in children.flatten() {
             let c2 = d2.path().join("bin").join("rider64.exe");
             if c2.exists() { return Some(c2); }
         }

@@ -69,11 +69,11 @@ impl DevToolApp {
         // Auto-select a provider/model the first time we have options, or if
         // the previously selected provider disappeared (server stopped)
         // between refreshes.
-        if !providers.iter().any(|(p, _)| Some(*p) == self.chat_provider) {
-            if let Some((p, models)) = providers.first() {
-                self.chat_provider = Some(*p);
-                self.chat_model    = models.first().cloned().unwrap_or_default();
-            }
+        if !providers.iter().any(|(p, _)| Some(*p) == self.chat_provider)
+            && let Some((p, models)) = providers.first()
+        {
+            self.chat_provider = Some(*p);
+            self.chat_model    = models.first().cloned().unwrap_or_default();
         }
 
         // `ui.horizontal` is `Layout::left_to_right(Align::Center)` — with

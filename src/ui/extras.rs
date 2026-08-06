@@ -90,7 +90,7 @@ impl DevToolApp {
                 // relative to the available column (capped so it doesn't
                 // get absurd on an ultrawide window) uses that space
                 // instead of just leaving it blank.
-                let gif_size = ui.available_width().min(420.0).max(180.0);
+                let gif_size = ui.available_width().clamp(180.0, 420.0);
                 egui::Frame::none()
                     .fill(GIF_BG)
                     .stroke(egui::Stroke::new(1.0, accent()))

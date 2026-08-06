@@ -34,8 +34,9 @@ impl DevToolApp {
                         "Unreal's own build scripts (UAT/UBT) have a long-standing bug with spaces \
                          in paths — most often hit via the default \"C:\\Program Files\\Epic Games\\...\" \
                          install. It shows up as a cryptic \"'C:\\Program' is not recognized...\" failure \
-                         after a long build. The fix below links the affected folder(s) to a space-free \
-                         path via an NTFS junction — it doesn't move or copy anything."
+                         after a long build. Packaging and VS rebuild automatically route through a \
+                         space-free NTFS junction; the button creates the link now and doesn't move \
+                         or copy anything."
                     ).size(10.5).color(egui::Color32::from_rgb(210, 190, 140)),
                 );
                 ui.add_space(6.0);

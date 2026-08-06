@@ -21,7 +21,6 @@ pub fn package_game(
     pending_zip:  Arc<Mutex<Option<PathBuf>>>,
     cancel:       Arc<AtomicBool>,
     progress:     Arc<Mutex<f32>>,
-    close_editor: bool,
     use_space_free_link: bool,
 ) -> String {
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
@@ -34,9 +33,46 @@ pub fn package_game(
         Some(p) => p.to_path_buf(),
         None    => return "[ERROR] Bad project path.".into(),
     };
+    if !uproject.is_file() {
+        return format!("[ERROR] Project file not found: {}", uproject.display());
+    }
+    if let Err(e) = validate_leaf_name(&pack_name, "Package name") {
+        return format!("[ERROR] {e}");
+    }
+    if let Err(e) = validate_leaf_name(&exe_name, "Executable name") {
+        return format!("[ERROR] {e}");
+    }
+    if let Err(e) = validate_leaf_name(&version_str, "Version") {
+        return format!("[ERROR] {e}");
+    }
+
     let build_dir   = project_dir.join("build");
     let version_dir = build_dir.join(&version_str);
     let log_path    = version_dir.join("BuildLog.txt");
+
+    if version_dir.exists() {
+        if !version_dir.is_dir() {
+            return format!("[ERROR] Version output path is not a folder: {}", version_dir.display());
+        }
+        match fs::read_dir(&version_dir) {
+            Ok(mut entries) => {
+                if entries.next().is_some() {
+                    return format!(
+                        "[ERROR] Version output already exists: {}\nChoose a new version before packaging.",
+                        version_dir.display(),
+                    );
+                }
+            }
+            Err(e) => return format!("[ERROR] Read version output folder: {e}"),
+        }
+    }
+
+    check!();
+    upd!("[1/5] Closing Unreal Editor before packaging…");
+    if let Err(e) = close_editor_if_running(&status) {
+        return format!("[ERROR] {e}");
+    }
+    check!();
 
     prog!(0.02);
     upd!(format!("[1/5] Creating output directory…\n→ {}", version_dir.display()));
@@ -45,18 +81,15 @@ pub fn package_game(
     }
     prog!(0.05);
 
-    check!();
-    if close_editor {
-        close_editor_if_running(&status);
-    }
-    check!();
-
     // UAT's own batch scripts break on spaces in paths (most commonly hit via
     // the default "C:\Program Files\Epic Games\..." engine install). If the
     // user opted into the fix, alias the engine/project dirs to space-free
     // directory junctions and build the UAT command line from those instead —
     // the junctions are transparent to the filesystem, so output still lands
     // in the real `version_dir` computed above.
+    let use_space_free_link = use_space_free_link
+        || crate::ops::preflight::has_space(&engine)
+        || crate::ops::preflight::has_space(&project_dir);
     let (engine_for_cmd, project_dir_for_cmd) = if use_space_free_link {
         let engine_alias = match crate::ops::preflight::ensure_space_free_alias(&engine) {
             Ok(p)  => p,
@@ -74,6 +107,9 @@ pub fn package_game(
     let archive_dir_for_cmd = project_dir_for_cmd.join("build").join(&version_str);
 
     let runuat = engine_for_cmd.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
+    if !runuat.is_file() {
+        return format!("[ERROR] RunUAT.bat not found: {}", runuat.display());
+    }
     upd!(format!("[2/5] Running UAT BuildCookRun…  (may take 30+ min)\nLog → {}", log_path.display()));
 
     // Use spawn() so we can kill the process if the user cancels
@@ -86,8 +122,15 @@ pub fn package_game(
         Err(e) => return format!("[ERROR] Clone log handle: {}", e),
     };
 
-    let mut uat_child = match crate::ops::cmd("cmd")
-        .args(["/c", &runuat.to_string_lossy()])
+    // Check again immediately before launching UAT so a user cannot reopen
+    // Unreal during the small setup window after the initial pre-flight.
+    check!();
+    upd!("[2/5] Verifying Unreal Editor is closed…");
+    if let Err(e) = close_editor_if_running(&status) {
+        return format!("[ERROR] {e}");
+    }
+
+    let mut uat_child = match crate::ops::batch_cmd(&runuat)
         .arg("BuildCookRun")
         .arg(format!("-project={}", uproject_for_cmd.display()))
         .args(["-noP4", "-unattended", "-platform=Win64",
@@ -115,8 +158,14 @@ pub fn package_game(
             // project open.
             kill_process_tree(uat_child.id());
             let _ = uat_child.wait();
-            close_editor_if_running(&status);
-            return format!("[CANCELLED] UAT was cancelled.\nPartial log → {}", log_path.display());
+            let close_note = close_editor_if_running(&status)
+                .err()
+                .map(|e| format!("\n[WARNING] {e}"))
+                .unwrap_or_default();
+            return format!(
+                "[CANCELLED] UAT was cancelled.\nPartial log → {}{}",
+                log_path.display(), close_note,
+            );
         }
         match uat_child.try_wait() {
             Ok(Some(s)) => break s,
@@ -129,16 +178,15 @@ pub fn package_game(
         }
     };
     if !uat_exit.success() {
-        let editor_hint = if !close_editor && is_editor_running() {
-            "\nTip: Unreal Editor is still open — save your work, close it, then try again."
-        } else {
-            ""
-        };
+        let close_note = close_editor_if_running(&status)
+            .err()
+            .map(|e| format!("\n[WARNING] {e}"))
+            .unwrap_or_default();
         return format!(
-            "[ERROR] UAT failed (exit {}).\nLog → {}{}",
+            "[ERROR] UAT failed (exit {}).{}{}",
             uat_exit.code().unwrap_or(-1),
-            log_path.display(),
-            editor_hint,
+            uat_failure_details(&log_path),
+            close_note,
         );
     }
     prog!(0.80);
@@ -147,8 +195,9 @@ pub fn package_game(
     let uat_windows = version_dir.join("Windows");
     if !uat_windows.exists() {
         return format!(
-            "[ERROR] UAT output not found: {}\nLog → {}",
-            uat_windows.display(), log_path.display()
+            "[ERROR] UAT output not found: {}{}",
+            uat_windows.display(),
+            uat_failure_details(&log_path),
         );
     }
 
@@ -165,12 +214,19 @@ pub fn package_game(
 
     prog!(0.85);
     upd!("[4/5] Renaming executable…");
-    if let Some(found) = find_main_exe(&package_dir) {
-        let target_exe = package_dir.join(format!("{}.exe", exe_name));
-        if found != target_exe
-            && let Err(e) = fs::rename(&found, &target_exe) {
-                return format!("[ERROR] rename exe: {}", e);
-            }
+    let target_exe = package_dir.join(format!("{}.exe", exe_name));
+    let found = if target_exe.is_file() {
+        target_exe.clone()
+    } else {
+        let Some(found) = find_main_exe(&package_dir) else {
+            return format!("[ERROR] No packaged game executable found in {}", package_dir.display());
+        };
+        found
+    };
+    if found != target_exe
+        && let Err(e) = fs::rename(&found, &target_exe)
+    {
+        return format!("[ERROR] rename exe: {}", e);
     }
 
     let zip_name = format!("{}_{}.zip", pack_name, version_str);
@@ -497,12 +553,22 @@ pub fn upload_via_rclone(
 /// Returns `true` if any known Unreal Editor process is currently running.
 /// Fast — reads the OS process list, no network or disk I/O.
 pub fn is_editor_running() -> bool {
-    const EDITORS: &[&str] = &["UnrealEditor.exe", "UE4Editor.exe"];
+    const EDITORS: &[&str] = &[
+        "UnrealEditor.exe",
+        "UE4Editor.exe",
+        "UnrealEditor-Cmd.exe",
+        "UE4Editor-Cmd.exe",
+    ];
     EDITORS.iter().any(|e| is_process_running(e))
 }
 
-fn close_editor_if_running(status: &Arc<Mutex<String>>) {
-    const EDITORS: &[&str] = &["UnrealEditor.exe", "UE4Editor.exe"];
+fn close_editor_if_running(status: &Arc<Mutex<String>>) -> Result<(), String> {
+    const EDITORS: &[&str] = &[
+        "UnrealEditor.exe",
+        "UE4Editor.exe",
+        "UnrealEditor-Cmd.exe",
+        "UE4Editor-Cmd.exe",
+    ];
     for editor_exe in EDITORS {
         if !is_process_running(editor_exe) { continue; }
 
@@ -512,9 +578,10 @@ fn close_editor_if_running(status: &Arc<Mutex<String>>) {
         );
 
         // Graceful close first (sends WM_CLOSE)
-        let _ = crate::ops::cmd("taskkill")
+        crate::ops::cmd("taskkill")
             .args(["/im", editor_exe])
-            .output();
+            .status()
+            .map_err(|e| format!("Could not request {} to close: {}", editor_exe, e))?;
 
         // Wait up to 30 s for graceful exit (poll every 500 ms)
         for _ in 0..60 {
@@ -524,12 +591,61 @@ fn close_editor_if_running(status: &Arc<Mutex<String>>) {
 
         // Force-kill if it still hasn't exited
         if is_process_running(editor_exe) {
-            let _ = crate::ops::cmd("taskkill")
-                .args(["/f", "/im", editor_exe])
-                .output();
+            crate::ops::cmd("taskkill")
+                .args(["/f", "/t", "/im", editor_exe])
+                .status()
+                .map_err(|e| format!("Could not force-close {}: {}", editor_exe, e))?;
             std::thread::sleep(Duration::from_secs(2));
         }
+
+        if is_process_running(editor_exe) {
+            return Err(format!(
+                "Could not close {}. Save your work, close Unreal, and try again.",
+                editor_exe,
+            ));
+        }
     }
+
+    if is_editor_running() {
+        return Err("Unreal is still running. Close it before packaging.".to_string());
+    }
+    Ok(())
+}
+
+fn uat_failure_details(log_path: &Path) -> String {
+    let diagnoses = crate::ops::diagnostics::scan_build_log(log_path);
+    let mut details = String::new();
+    if !diagnoses.is_empty() {
+        details.push_str("\nDetected problems:\n");
+        for diagnosis in diagnoses {
+            details.push_str("- ");
+            details.push_str(&diagnosis.matched);
+            details.push('\n');
+        }
+    }
+
+    details.push_str(&format!("\nLog → {}\nLast UAT output:\n", log_path.display()));
+    match fs::read_to_string(log_path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().filter(|line| !line.trim().is_empty()).collect();
+            if lines.is_empty() {
+                details.push_str("(log is empty)\n");
+            } else {
+                let start = lines.len().saturating_sub(25);
+                for line in &lines[start..] {
+                    let trimmed = line.trim();
+                    let shortened: String = trimmed.chars().take(240).collect();
+                    details.push_str(&shortened);
+                    if trimmed.chars().count() > 240 {
+                        details.push('…');
+                    }
+                    details.push('\n');
+                }
+            }
+        }
+        Err(e) => details.push_str(&format!("(could not read log: {e})\n")),
+    }
+    details
 }
 
 /// Kills `pid` and its entire descendant process tree (e.g. `cmd.exe` ->
@@ -585,7 +701,7 @@ pub fn format_version(n: u32) -> String {
 
 pub fn find_main_exe(dir: &Path) -> Option<PathBuf> {
     const SKIP: &[&str] = &["CrashReportClient", "UEPrereqSetup_x64", "UEPrereqSetup_x86"];
-    fs::read_dir(dir).ok()?
+    let mut candidates: Vec<PathBuf> = fs::read_dir(dir).ok()?
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")))
         .filter(|e| {
@@ -595,5 +711,91 @@ pub fn find_main_exe(dir: &Path) -> Option<PathBuf> {
             !SKIP.contains(&stem.as_str())
         })
         .map(|e| e.path())
-        .next()
+        .collect();
+    candidates.sort_unstable();
+    candidates.into_iter().next()
+}
+
+/// Validates a user-controlled Windows file or directory name.
+///
+/// Package and executable names become path components later in the pipeline,
+/// so separators, reserved device names, and trailing dots/spaces must be
+/// rejected before any UAT work starts.
+pub fn validate_leaf_name(value: &str, label: &str) -> Result<(), String> {
+    let name = value.trim();
+    if name.is_empty() {
+        return Err(format!("{label} cannot be empty."));
+    }
+    if name != value {
+        return Err(format!("{label} cannot start or end with whitespace."));
+    }
+    if name == "." || name == ".." {
+        return Err(format!("{label} cannot be '.' or '..'."));
+    }
+    if name.chars().any(|c| {
+        c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+    }) {
+        return Err(format!("{label} contains a character Windows cannot use."));
+    }
+    if name.ends_with([' ', '.']) {
+        return Err(format!("{label} cannot end with a space or period."));
+    }
+
+    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    if reserved {
+        return Err(format!("{label} uses a reserved Windows device name."));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_windows_leaf_names() {
+        assert!(validate_leaf_name("MyGame", "Name").is_ok());
+        assert!(validate_leaf_name("My Game 2", "Name").is_ok());
+        for invalid in ["", "..", "bad/name", "CON.txt", "game.", "game ", "LPT1"] {
+            assert!(validate_leaf_name(invalid, "Name").is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn finds_next_version_after_existing_versions() {
+        let root = std::env::temp_dir().join(format!(
+            "unreal-devtool-version-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("v0.0.1")).unwrap();
+        fs::create_dir_all(root.join("v0.1.0")).unwrap();
+        fs::create_dir_all(root.join("not-a-version")).unwrap();
+
+        assert_eq!(find_next_version(&root), 101);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failure_details_explain_the_error_and_show_log_tail() {
+        let path = std::env::temp_dir().join(format!(
+            "unreal-devtool-failure-log-{}.txt",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "header\n'C:\\Program' is not recognized as an internal or external command\nfinal UAT error\n",
+        )
+        .unwrap();
+
+        let details = uat_failure_details(&path);
+        assert!(details.contains("Detected problems:"));
+        assert!(details.contains("final UAT error"));
+        fs::remove_file(path).unwrap();
+    }
 }

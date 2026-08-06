@@ -81,7 +81,7 @@ pub fn latest_build_log(project_path: &Path) -> Option<PathBuf> {
     let mut consider = |log: PathBuf| {
         let Ok(meta) = fs::metadata(&log) else { return };
         let Ok(modified) = meta.modified() else { return };
-        if best.as_ref().map_or(true, |(t, _)| modified > *t) {
+        if best.as_ref().is_none_or(|(t, _)| modified > *t) {
             best = Some((modified, log));
         }
     };
