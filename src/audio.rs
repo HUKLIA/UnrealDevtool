@@ -64,10 +64,6 @@ impl AudioPlayer {
         self.bytes = bytes;
     }
 
-    pub fn is_playing(&self) -> bool {
-        self.playing
-    }
-
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
         self.player.set_volume(Self::effective_volume(self.muted, self.volume));

@@ -140,7 +140,7 @@ pub fn rebuild_vs_files(
     };
     if !gen_exit.success() {
         return format!(
-            "[ERROR] Generator failed (exit {}).\nLog → {}",
+            "[ERROR] Generator failed (exit {}).\nLog -> {}",
             gen_exit.code().unwrap_or(-1),
             log_path.display()
         );
@@ -170,7 +170,7 @@ pub fn rebuild_vs_files(
     prog!(1.0);
 
     match sln {
-        Some(p) => format!("[DONE] Project files rebuilt.\nSolution → {}", p.display()),
+        Some(p) => format!("[DONE] Project files rebuilt.\nSolution -> {}", p.display()),
         None    => "[DONE] Project files rebuilt (no .sln found).".to_string(),
     }
 }

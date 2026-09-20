@@ -111,8 +111,10 @@ pub fn ensure_space_free_alias(target: &Path) -> Result<PathBuf, String> {
 
 // ── PC setup checks ───────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CheckStatus { Ok, Warn, Fail }
 
+#[derive(Clone)]
 pub struct CheckItem {
     pub status: CheckStatus,
     pub label:  String,
@@ -172,8 +174,45 @@ pub fn run_checks(engine_dir: &Option<PathBuf>, project_path: &Option<PathBuf>) 
     items
 }
 
-/// Disk-space check, split out from [`run_checks`] because it shells out to
-/// PowerShell — slow enough (cold-start overhead, sometimes 200ms-1s+) that
+/// Whether the toolchain a non-Windows target needs is present.
+///
+/// Returns `(ok, short label)`, or `None` for Windows, which needs nothing
+/// beyond the engine. These only read environment variables and check that the
+/// folder they name exists — Unreal's own setup scripts (SetupAndroid.bat, the
+/// Linux cross-compile toolchain installer) are what create them, and a
+/// missing one is the most common reason the first Android or Linux build
+/// fails 10 minutes in with an unhelpful message.
+pub fn platform_sdk_check(target: crate::types::BuildTarget) -> Option<(bool, &'static str, String)> {
+    use crate::types::BuildTarget;
+    let dir_from = |vars: &[&str]| -> Option<PathBuf> {
+        vars.iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from)
+            .find(|p| p.is_dir())
+    };
+    match target {
+        BuildTarget::Android => {
+            let sdk = dir_from(&["ANDROID_HOME", "ANDROID_SDK_ROOT"])
+                .or_else(|| std::env::var_os("LOCALAPPDATA")
+                    .map(|l| PathBuf::from(l).join("Android").join("Sdk"))
+                    .filter(|p| p.is_dir()));
+            let ndk = dir_from(&["NDKROOT", "ANDROID_NDK_ROOT"]);
+            Some(match (sdk, ndk) {
+                (Some(_), Some(_)) => (true,  "Android SDK", "SDK and NDK found".into()),
+                (Some(_), None)    => (false, "Android SDK", "NDK not set — run SetupAndroid.bat".into()),
+                _                  => (false, "Android SDK", "not found — run SetupAndroid.bat".into()),
+            })
+        }
+        BuildTarget::Linux => Some(match dir_from(&["LINUX_MULTIARCH_ROOT"]) {
+            Some(_) => (true,  "Linux toolchain", "cross-compile toolchain found".into()),
+            None    => (false, "Linux toolchain", "LINUX_MULTIARCH_ROOT not set".into()),
+        }),
+        BuildTarget::Win64 | BuildTarget::Mac => None,
+    }
+}
+
+/// Disk-space check, split out from [`run_checks`] because it touches
+/// the disk — slow enough on a busy or network drive that
 /// running it synchronously on the UI thread freezes the window (Windows
 /// shows the "not responding" ghost overlay until it returns). Callers must
 /// run this on a background thread, same as every other slow operation in
@@ -196,16 +235,33 @@ pub fn disk_space_check_item(dir: &Path) -> Option<CheckItem> {
     })
 }
 
+/// Free space on the drive that holds `path`, in GiB.
+///
+/// Asks the OS directly (`GetDiskFreeSpaceExW`). It used to spawn a PowerShell
+/// process just to read one number, which was slow (hundreds of milliseconds
+/// of cold start on every poll) and is exactly the kind of child-process
+/// pattern that makes an unsigned executable look like a script launcher.
 fn free_space_gb(path: &Path) -> Option<f64> {
-    let drive  = drive_prefix(path)?;
-    let letter = drive.trim_end_matches(':').trim_end_matches('\\').chars().last()?;
-    let ps = format!("[System.IO.DriveInfo]::new('{letter}').AvailableFreeSpace");
-    let out = crate::ops::cmd("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-        .output()
-        .ok()?;
-    let bytes: f64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
-    Some(bytes / 1_073_741_824.0)
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            available_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+
+    let drive = drive_prefix(path)?;
+    let root: Vec<u16> = std::ffi::OsString::from(format!("{drive}\\"))
+        .encode_wide().chain(std::iter::once(0)).collect();
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    // SAFETY: `root` is a NUL-terminated wide string that outlives the call,
+    // and the three out-pointers refer to live, properly aligned u64 locals.
+    let ok = unsafe { GetDiskFreeSpaceExW(root.as_ptr(), &mut avail, &mut total, &mut free) };
+    (ok != 0).then(|| avail as f64 / 1_073_741_824.0)
 }
 
 #[cfg(test)]

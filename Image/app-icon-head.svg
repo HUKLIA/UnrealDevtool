@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12335a"/>
+      <stop offset="1" stop-color="#061425"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8bf4f0"/>
+      <stop offset="0.5" stop-color="#25c7d5"/>
+      <stop offset="1" stop-color="#12869d"/>
+    </linearGradient>
+    <linearGradient id="visor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#112c47"/>
+      <stop offset="1" stop-color="#061321"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Transparent outside the tile: the app icon stays clean on any desktop. -->
+  <rect x="44" y="44" width="936" height="936" rx="220" fill="url(#tile)" stroke="#29e3ee" stroke-width="22"/>
+  <rect x="74" y="74" width="876" height="876" rx="194" fill="none" stroke="#0c6d8c" stroke-width="5" opacity="0.9"/>
+
+  <!-- Original cyber-mascot head silhouette: teal hair and angular side ribbons. -->
+  <path d="M208 452 L132 358 L184 234 L300 310 L324 180 L442 250 L512 158 L582 250 L700 180 L724 310 L840 234 L892 358 L816 452 L794 590 L726 688 L644 730 L380 730 L298 688 L230 590 Z"
+        fill="url(#hair)" stroke="#061525" stroke-width="26" stroke-linejoin="round"/>
+  <path d="M174 244 L292 320 L224 456 L146 370 Z M850 244 L732 320 L800 456 L878 370 Z"
+        fill="#21cbd8" stroke="#061525" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M186 269 L260 322 L218 358 L160 316 Z M838 269 L764 322 L806 358 L864 316 Z"
+        fill="#f07bb8" opacity="0.9"/>
+
+  <!-- Empty faceplate: deliberately no eyes, mouth, glyphs, or text. -->
+  <path d="M294 424 Q294 334 384 304 Q512 266 640 304 Q730 334 730 424 L730 554 Q730 650 640 682 Q512 720 384 682 Q294 650 294 554 Z"
+        fill="url(#visor)" stroke="#6deef0" stroke-width="12"/>
+  <!-- Small collar keeps the head readable at launcher size. -->
+  <path d="M376 694 L430 758 L512 790 L594 758 L648 694 L690 846 L334 846 Z"
+        fill="#14263d" stroke="#061525" stroke-width="22" stroke-linejoin="round"/>
+  <path d="M426 742 L512 778 L598 742" fill="none" stroke="#29e3ee" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="692" cy="786" r="18" fill="#ffc857" stroke="#061525" stroke-width="10"/>
+</svg>

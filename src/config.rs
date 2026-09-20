@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::types::BuildConfiguration;
+use crate::types::{BuildConfiguration, BuildTarget};
 
 /// Base config directory: `%APPDATA%\UnrealDevTool\`
 pub fn config_dir() -> Option<PathBuf> {
@@ -36,6 +36,40 @@ pub fn clear_project_path() {
 // engine — e.g. a source build, a non-standard install location, or a
 // machine where the Epic Games Launcher registry keys are missing.
 
+/// Recently-opened projects, newest first.
+///
+/// The app already persisted *the* project path; it never kept a history, so
+/// switching between two projects meant browsing for the other one every time.
+/// The setup surface lists these.
+pub fn recents_file() -> Option<PathBuf> {
+    Some(config_dir()?.join("recent_projects.txt"))
+}
+
+pub fn load_recent_projects() -> Vec<PathBuf> {
+    let Some(f) = recents_file() else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(f) else { return Vec::new() };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .take(8)
+        .collect()
+}
+
+/// Moves `path` to the front, de-duplicated, capped at 8.
+pub fn push_recent_project(path: &Path) {
+    let Some(f) = recents_file() else { return };
+    if let Some(dir) = f.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut list = load_recent_projects();
+    list.retain(|p| p != path);
+    list.insert(0, path.to_path_buf());
+    list.truncate(8);
+    let body: Vec<String> = list.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let _ = std::fs::write(f, body.join("\n"));
+}
+
 pub fn load_engine_path() -> Option<PathBuf> {
     let content = fs::read_to_string(config_dir()?.join("engine_path.txt")).ok()?;
     let p = PathBuf::from(content.trim());
@@ -65,7 +99,12 @@ pub fn project_config_file(project_path: &Path) -> Option<PathBuf> {
     config_dir().map(|d| d.join(format!("{}_build.cfg", stem)))
 }
 
-pub fn load_project_config(project_path: &Path) -> (String, String, BuildConfiguration) {
+/// Reads the per-project build settings.
+///
+/// The target is a fourth line appended after the existing three. A file
+/// written by an older build simply has no fourth line, so it reads back as
+/// Win64 — which is what those builds could produce anyway.
+pub fn load_project_config(project_path: &Path) -> (String, String, BuildConfiguration, BuildTarget) {
     let default = project_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -81,9 +120,12 @@ pub fn load_project_config(project_path: &Path) -> (String, String, BuildConfigu
                 Some("Shipping") => BuildConfiguration::Shipping,
                 _ => BuildConfiguration::Development,
             };
-            return (pack, exe, configuration);
+            let target = lines.next().map(str::trim)
+                .and_then(BuildTarget::from_key)
+                .unwrap_or(BuildTarget::Win64);
+            return (pack, exe, configuration, target);
         }
-    (default.clone(), default, BuildConfiguration::Development)
+    (default.clone(), default, BuildConfiguration::Development, BuildTarget::Win64)
 }
 
 pub fn save_project_config(
@@ -91,10 +133,50 @@ pub fn save_project_config(
     pack_name: &str,
     exe_name: &str,
     configuration: BuildConfiguration,
+    target: BuildTarget,
 ) {
     if let Some(cfg) = project_config_file(project_path) {
         if let Some(dir) = config_dir() { let _ = fs::create_dir_all(dir); }
-        let _ = fs::write(cfg, format!("{}\n{}\n{}", pack_name, exe_name, configuration.as_str()));
+        let _ = fs::write(cfg, format!(
+            "{}\n{}\n{}\n{}",
+            pack_name, exe_name, configuration.as_str(), target.as_key(),
+        ));
+    }
+}
+
+// ── Per-project advanced UAT options (`{stem}_uat.cfg`) ──────────────────────
+// Line 1: "1" when pak compression is on
+// Line 2: extra UAT arguments, verbatim (validated again before every build)
+// Line 3: packaging method key (full / stepwise / restage)
+//
+// Kept in its own file rather than as lines five and six of the build config:
+// that format is positional, and every added line risked shifting what an
+// older build would read back as the target or configuration.
+
+pub fn uat_options_file(project_path: &Path) -> Option<PathBuf> {
+    let stem = project_path.file_stem()?.to_string_lossy().to_string();
+    config_dir().map(|d| d.join(format!("{}_uat.cfg", stem)))
+}
+
+pub fn load_uat_options(project_path: &Path) -> (bool, String, crate::types::PackageMethod) {
+    use crate::types::PackageMethod;
+    let none = (false, String::new(), PackageMethod::Full);
+    let Some(f) = uat_options_file(project_path) else { return none };
+    let Ok(content) = fs::read_to_string(f) else { return none };
+    let mut lines = content.lines();
+    let compress = lines.next().is_some_and(|l| l.trim() == "1");
+    let extra = lines.next().unwrap_or("").trim().to_string();
+    let method = lines.next().and_then(PackageMethod::from_key).unwrap_or(PackageMethod::Full);
+    (compress, extra, method)
+}
+
+pub fn save_uat_options(project_path: &Path, compress: bool, extra: &str, method: crate::types::PackageMethod) {
+    if let Some(f) = uat_options_file(project_path) {
+        if let Some(dir) = config_dir() { let _ = fs::create_dir_all(dir); }
+        let _ = fs::write(f, format!("{}
+{}
+{}",
+            if compress { "1" } else { "0" }, extra.trim(), method.as_key()));
     }
 }
 

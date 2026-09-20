@@ -20,14 +20,14 @@ pub fn show_bar_chart(ui: &mut egui::Ui, data: &[(String, usize)], height: f32) 
     let painter = ui.painter_at(rect);
 
     // Track background the bars sit on top of.
-    painter.rect_filled(rect, egui::Rounding::same(4.0), GIF_BG);
+    painter.rect_filled(rect, egui::Rounding::same(4.0), DEEP);
 
     // Faint horizontal gridlines — a cheap "axis" cue without pulling in a
     // real charting dependency for one small panel.
     const GRID_LINES: usize = 3;
     for i in 1..=GRID_LINES {
         let y = rect.top() + rect.height() * (i as f32 / (GRID_LINES as f32 + 1.0));
-        painter.hline(rect.x_range(), y, egui::Stroke::new(1.0_f32, CARD_BORDER));
+        painter.hline(rect.x_range(), y, egui::Stroke::new(1.0_f32, LINE));
     }
 
     if data.is_empty() {
@@ -81,7 +81,7 @@ pub fn show_bar_chart(ui: &mut egui::Ui, data: &[(String, usize)], height: f32) 
                 egui::Align2::CENTER_CENTER,
                 label,
                 egui::FontId::monospace(9.0),
-                HINT_GRAY,
+                MUTED,
             );
         }
     }

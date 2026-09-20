@@ -17,10 +17,16 @@ use crate::engine::{build_init_status, detect_unreal_engine, is_valid_engine_dir
 use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, update as ops_update, vs as ops_vs};
 use crate::ops::update::UpdateInfo;
-use crate::theme::apply_miku_theme;
-use crate::types::{AppTab, BuildConfiguration, ExtrasTab, GitState, GitTaskStatus, IdeChoice};
+use crate::theme::{apply_theme, install_fonts};
+use crate::types::{BuildConfiguration, BuildOutcome, BuildTarget, ExtrasTab, GitState, GitTaskStatus,
+                   IdeChoice, RunState, Sheet};
 use crate::webview::{WebPanel, WebViewManager};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
+/// How long the completed boot log stays on screen before it starts to fade.
+const INTRO_HOLD_SECS: f32 = 0.55;
+/// How long that fade takes.
+const INTRO_FADE_SECS: f32 = 0.45;
 
 // ── Application state ─────────────────────────────────────────────────────────
 
@@ -51,6 +57,8 @@ pub struct DevToolApp {
     pub use_custom_version:         bool,
     pub version_override:           String,
     pub build_configuration:        BuildConfiguration,
+    /// Platform this build targets. Persisted per project.
+    pub build_target:               BuildTarget,
     pub editor_is_running:          bool,   // refreshed by `refresh_package_observed` (tab entry, periodic poll, task completion)
     /// `is_editor_running()` shells out to `tasklist` — set on a background
     /// thread by `refresh_package_observed`, drained into `editor_is_running`
@@ -143,10 +151,62 @@ pub struct DevToolApp {
     // Self-update
     pub update_info:        Arc<Mutex<Option<UpdateInfo>>>,
     pub show_update_banner: bool,
+    /// Reuse the previous cook instead of re-cooking everything. Off by
+    /// default: a stale iterative cook can hide a content problem a clean cook
+    /// would surface, so the build you ship should be a full one.
+    pub iterate_cook: bool,
+    /// `-compressed`: smaller paks, slower to build and to load.
+    pub compress_pak: bool,
+    /// How the project is packaged (see `types::PackageMethod`).
+    pub package_method: crate::types::PackageMethod,
+    /// Command palette (Ctrl+K).
+    pub palette_open: bool,
+    pub palette_query: String,
+    pub palette_sel: usize,
+    /// A build set to start unattended at a time of day: when, and the
+    /// "HH:MM" it was set for.
+    pub schedule: Option<(Instant, String)>,
+    pub schedule_input: String,
+    /// Result of `ops::doctor::check_project`, refreshed on the slow poll.
+    pub doctor_items: Vec<crate::ops::preflight::CheckItem>,
+    /// Live project monitor; exists only while its sheet is open.
+    pub monitor: Option<crate::ops::monitor::MonitorHandle>,
+    pub monitor_filter: crate::types::LogFilter,
+    /// The log as it was when Pause was pressed, so it can be read while the
+    /// editor keeps writing.
+    pub monitor_frozen: Option<Vec<crate::ops::monitor::LogEntry>>,
+    /// Extra UAT arguments typed by the user (validated before use).
+    pub extra_uat_args: String,
+
+    // ── Clean project ───────────────────────────────────────────────────
+    /// Removable folders found under the project, with their sizes.
+    pub clean_targets: Vec<crate::ops::clean::Target>,
+    /// Which of them are ticked.
+    pub clean_selected: Vec<bool>,
+    /// Second click arms the delete, same as the updater.
+    pub clean_confirm: bool,
+
+    // ── Frame pacing ────────────────────────────────────────────────────
+    /// Rolling frame-time samples in milliseconds, for the debug meter and
+    /// for deciding how much motion the machine can actually afford.
+    pub frame_ms: std::collections::VecDeque<f32>,
+    /// Smoothed frame interval in seconds. Animations are scaled against the
+    /// real display cadence rather than an assumed 60 Hz.
+    pub frame_dt: f32,
+    /// Frames that followed an idle gap, counted separately so they cannot be
+    /// mistaken for dropped frames.
+    pub wake_frames: u32,
+
+    /// Arms the second click of the update action — see the update notice in
+    /// `ui/mod.rs` for why replacing the running exe is not a one-click thing.
+    pub update_confirm: bool,
+    /// Set by the first click on Cancel; a second click within a few seconds
+    /// confirms. A 30-minute build should not die to one stray click.
+    pub cancel_armed: Option<Instant>,
     pub last_update_check:  Instant,
 
-    // Fast-package progress animation
-    pub fast_package_mode:  bool,
+    // Start time for the current task. The completed-build surface snapshots
+    // its elapsed duration when the task finishes.
     pub task_started_at:    Option<Instant>,
 
     // Custom media (2D image/GIF + looping sound)
@@ -178,7 +238,57 @@ pub struct DevToolApp {
     pub has_centered_window: bool,
 
     // Tabbed main layout
-    pub active_tab: AppTab,
+    /// Which secondary surface is open over the run surface, if any.
+    pub sheet: Option<Sheet>,
+    /// Current step of the interactive guide.  Anchors are captured while
+    /// the underlying surface is laid out, then the guide paints its
+    /// spotlight and callout over that live control.
+    /// The manual is its own overlay rather than a sheet.
+    ///
+    /// As a `Sheet` it was mutually exclusive with every other sheet, so the
+    /// tour could only ever describe the build screen — it could not open the
+    /// Browser or Settings and point at something on them.
+    pub guide_active: bool,
+    pub guide_step: usize,
+    pub guide_target: Option<egui::Rect>,
+    /// True while the multi-step git flow owns the main surface.
+    pub show_git_sheet: bool,
+
+    // ── The run ─────────────────────────────────────────────────────────
+    /// Live stage timings and log tail, written by the packaging thread.
+    pub run: Arc<Mutex<crate::ops::run::RunProgress>>,
+    /// Result of the last finished build. `Some` puts the surface in `Done`.
+    pub last_build: Option<BuildOutcome>,
+    /// Previous builds read off disk, newest first.
+    pub builds: Vec<crate::ops::history::BuildRecord>,
+    /// Filled by the background scan in `refresh_builds`, drained on the next
+    /// frame — walking the build tree stats thousands of files, so it can
+    /// never run on the UI thread.
+    pub builds_pending: Arc<Mutex<Option<Vec<crate::ops::history::BuildRecord>>>>,
+    /// Filled by `refresh_clean_targets`, drained on the next frame.
+    pub clean_pending: Arc<Mutex<Option<Vec<crate::ops::clean::Target>>>>,
+    /// Preflight checks plus the build-log scan, computed off the UI thread.
+    ///
+    /// The log scan reads and pattern-matches a whole UAT log, which runs to
+    /// tens of megabytes. It used to happen inline on the render thread every
+    /// three seconds, which is exactly the periodic hitch that made the app
+    /// feel like it was dropping frames.
+    #[allow(clippy::type_complexity)]
+    pub pc_check_pending: Arc<Mutex<Option<(
+        Vec<crate::ops::preflight::CheckItem>,
+        Option<PathBuf>,
+        Vec<crate::ops::diagnostics::Diagnosis>,
+    )>>>,
+    pub last_builds_poll: Instant,
+
+    // ── Built-in browser ────────────────────────────────────────────────
+    /// Address-bar contents. Separate from `browser_current` so typing in the
+    /// field does not count as having navigated anywhere.
+    pub browser_url_input: String,
+    /// Last URL we told the webview to load. Drives which shortcut renders as
+    /// active; in-page navigation (clicking a link) does not update it, since
+    /// wry gives us no URL-changed callback to hook.
+    pub browser_current:   String,
     pub extras_tab: ExtrasTab,
 
     /// Last time the active tab's cheap "keep it live" poll ran (see
@@ -204,6 +314,9 @@ pub struct DevToolApp {
     pub intro_log:        Vec<String>,
     pub intro_revealed:   usize,
     pub intro_done:       bool,
+    /// When the boot log finished. Drives the auto-advance hold and fade —
+    /// see `tick_intro` / `intro_fade`.
+    pub intro_done_at:    Option<Instant>,
 
     // Dashboard tab: paste-a-log-segment fallback alongside the
     // auto-scanned-from-disk build log (mirrors the reference mockup, which
@@ -218,7 +331,8 @@ impl DevToolApp {
         if let Some((r, g, b)) = ui_cfg.accent_rgb {
             crate::theme::set_accent_value(egui::Color32::from_rgb(r, g, b));
         }
-        apply_miku_theme(&cc.egui_ctx);
+        install_fonts(&cc.egui_ctx);
+        apply_theme(&cc.egui_ctx);
         let project_path    = load_project_path();
         let engine_override = load_engine_path().filter(|p| is_valid_engine_dir(p));
         let engine_dir       = engine_override.clone()
@@ -269,6 +383,7 @@ impl DevToolApp {
             use_custom_version:          false,
             version_override:            String::new(),
             build_configuration:         BuildConfiguration::Development,
+            build_target: BuildTarget::Win64,
             editor_is_running:           false,
             editor_check_pending:        Arc::new(Mutex::new(None)),
             version_check_pending:       Arc::new(Mutex::new(None)),
@@ -317,8 +432,28 @@ impl DevToolApp {
             pending_webview:  None,
             update_info:        Arc::new(Mutex::new(None)),
             show_update_banner: true,
+            update_confirm: false,
+            cancel_armed: None,
+            frame_ms: std::collections::VecDeque::new(),
+            frame_dt: 1.0 / 60.0,
+            wake_frames: 0,
+            iterate_cook: false,
+            compress_pak: false,
+            package_method: crate::types::PackageMethod::Full,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_sel: 0,
+            schedule: None,
+            schedule_input: String::new(),
+            doctor_items: Vec::new(),
+            monitor: None,
+            monitor_filter: crate::types::LogFilter::All,
+            monitor_frozen: None,
+            extra_uat_args: String::new(),
+            clean_targets: Vec::new(),
+            clean_selected: Vec::new(),
+            clean_confirm: false,
             last_update_check:  Instant::now(),
-            fast_package_mode:  false,
             task_started_at:    None,
             custom_gif_path,
             custom_sound_path,
@@ -334,7 +469,20 @@ impl DevToolApp {
             chat_cancel:     Arc::new(AtomicBool::new(false)),
             egui_ctx: cc.egui_ctx.clone(),
             has_centered_window: false,
-            active_tab: AppTab::Dashboard,
+            sheet: None,
+            guide_active: false,
+            guide_step: 0,
+            guide_target: None,
+            show_git_sheet: false,
+            run: Arc::new(Mutex::new(crate::ops::run::RunProgress::default())),
+            last_build: None,
+            builds: Vec::new(),
+            builds_pending: Arc::new(Mutex::new(None)),
+            clean_pending: Arc::new(Mutex::new(None)),
+            pc_check_pending: Arc::new(Mutex::new(None)),
+            last_builds_poll: Instant::now(),
+            browser_url_input: crate::ui::browser::HOME_URL.to_string(),
+            browser_current:   crate::ui::browser::HOME_URL.to_string(),
             extras_tab: ExtrasTab::Miku,
             last_tab_poll:  Instant::now(),
             last_disk_poll: Instant::now(),
@@ -344,6 +492,7 @@ impl DevToolApp {
             intro_log:        Vec::new(),
             intro_revealed:   0,
             intro_done:       false,
+            intro_done_at:    None,
             pasted_log_input:     String::new(),
             pasted_log_diagnosis: Vec::new(),
         };
@@ -353,9 +502,80 @@ impl DevToolApp {
         // it directly here instead, otherwise Preflight Diagnostics starts
         // empty until the user manually switches tabs and back.
         app.refresh_pc_check();
+        // Load the package config and scan past builds for whatever project
+        // was already set. These used to happen on first entry to the Package
+        // tab; with one surface there is no such entry point, so the run
+        // surface would otherwise open with empty names and an empty history.
+        if app.project_path.is_some() {
+            app.open_package_config();
+            app.refresh_builds();
+        }
         ops_update::cleanup_old_binary();
         app.check_for_updates(cc.egui_ctx.clone());
+        #[cfg(debug_assertions)]
+        app.demo_outcome();
         app
+    }
+
+    /// Debug builds only: `UDT_DEMO=ok|failed` opens straight onto a finished
+    /// build, so the result surfaces can be looked at without a 30-minute run.
+    #[cfg(debug_assertions)]
+    fn demo_outcome(&mut self) {
+        let Ok(mode) = std::env::var("UDT_DEMO") else { return };
+        self.show_intro = false;
+        // Screens that are not a build result: open straight onto them.
+        match mode.as_str() {
+            "ready" => return,
+            "monitor" => { self.open_sheet(crate::types::Sheet::Monitor); return; }
+            "checks"  => { self.open_sheet(crate::types::Sheet::Diagnostics); return; }
+            "extras"  => { self.open_sheet(crate::types::Sheet::Extras); return; }
+            "palette" => { self.palette_open = true; return; }
+            "guide"   => { self.open_guide(); self.guide_step = crate::ui::guide::step::CONFIGURE; return; }
+            _ => {}
+        }
+        if mode == "running" {
+            use crate::ops::run::{Level, LogLine, Stage};
+            *self.is_working.lock().unwrap() = true;
+            self.was_working = true;
+            self.task_started_at = Some(Instant::now() - std::time::Duration::from_secs(754));
+            let mut r = self.run.lock().unwrap();
+            let now = Instant::now();
+            r.current = Some(Stage::Cook);
+            r.started = [Some(now - std::time::Duration::from_secs(754)),
+                         Some(now - std::time::Duration::from_secs(600)), None, None];
+            r.elapsed[0] = Some(std::time::Duration::from_secs(150));
+            r.warnings = 12;
+            r.errors = 1;
+            for (i, (t, l)) in [
+                ("LogCook: Display: Cooked packages 4210 Packages Remain 1730", Level::Normal),
+                ("LogShaderCompilers: Warning: Shader compile slow on worker 3", Level::Warn),
+                ("LogCook: Error: Failed to cook /Game/Old/Unused.uasset", Level::Error),
+                ("LogCook: Display: Cooked packages 4300 Packages Remain 1640", Level::Normal),
+            ].into_iter().enumerate() {
+                let _ = i;
+                r.lines.push_back(LogLine { text: t.into(), level: l });
+            }
+            return;
+        }
+        let ok = mode == "ok";
+        self.last_build = Some(crate::types::BuildOutcome {
+            version: "v0.0.11".into(),
+            zip: ok.then(|| PathBuf::from("Q:/Demo/build/v0.0.11/Demo_v0.0.11.zip")),
+            bytes: 668 * 1024 * 1024,
+            duration: std::time::Duration::from_secs(692),
+            stages: [Some(std::time::Duration::from_secs(120)), Some(std::time::Duration::from_secs(400)),
+                     Some(std::time::Duration::from_secs(60)), Some(std::time::Duration::from_secs(112))],
+            warnings: 4,
+            errors: if ok { 0 } else { 3 },
+            ok,
+            platform: self.build_target,
+            config: self.build_configuration,
+            log: None,
+            error_samples: if ok { Vec::new() } else { vec![
+                "LogInit: Error: Failed to load /Game/Maps/Main.umap".into(),
+                "fatal error C1083: Cannot open include file: 'MobiusFish.h'".into(),
+            ] },
+        });
     }
 
     /// Boot-log lines for the intro splash — built from what was actually
@@ -400,10 +620,41 @@ impl DevToolApp {
             self.intro_revealed = target;
         }
         if self.intro_revealed >= self.intro_log.len() {
+            // Record *when* the log finished, so the hand-off below can hold
+            // the completed state briefly instead of cutting away the instant
+            // the last line lands.
+            if self.intro_done_at.is_none() {
+                self.intro_done_at = Some(Instant::now());
+            }
             self.intro_done = true;
-        } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(40));
         }
+
+        // Auto-advance. There used to be an "OPEN DEVTOOL" button here, which
+        // made the splash a dead end waiting on a click that only ever had one
+        // possible answer. It now dismisses itself: a short hold so the final
+        // line is readable, then a fade the intro screen itself renders (see
+        // `intro_fade`), and the main UI takes over.
+        if let Some(done_at) = self.intro_done_at {
+            let held = done_at.elapsed().as_secs_f32();
+            if held >= INTRO_HOLD_SECS + INTRO_FADE_SECS {
+                self.show_intro = false;
+            }
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+
+    /// Opacity for the whole intro screen: 1.0 until the log finishes and the
+    /// hold elapses, then eased down to 0 over `INTRO_FADE_SECS`.
+    pub fn intro_fade(&self) -> f32 {
+        let Some(done_at) = self.intro_done_at else { return 1.0 };
+        let held = done_at.elapsed().as_secs_f32();
+        if held <= INTRO_HOLD_SECS {
+            return 1.0;
+        }
+        let t = ((held - INTRO_HOLD_SECS) / INTRO_FADE_SECS).clamp(0.0, 1.0);
+        // Ease-in-cubic on the way out — it lingers, then leaves quickly,
+        // which reads as a deliberate hand-off rather than a dropped frame.
+        1.0 - t * t * t
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
@@ -453,6 +704,37 @@ impl DevToolApp {
         self.refresh_pc_check();
     }
 
+    /// Accepts `path` as the active project: persists it, records it in the
+    /// recents list, re-detects the engine and refreshes everything derived
+    /// from it. One entry point, so no caller has to remember the full set.
+    pub fn apply_project_path(&mut self, path: PathBuf) {
+        if !path.is_file() || !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("uproject")) {
+            self.set_status("[ERROR] Select an existing .uproject file.".into());
+            return;
+        }
+        save_project_path(&path);
+        crate::config::push_recent_project(&path);
+        self.project_path_input = path.to_string_lossy().to_string();
+        self.project_path       = Some(path);
+        self.redetect_engine();
+        self.open_package_config();
+        self.refresh_pc_check();
+        self.refresh_builds();
+        if let Some(dir) = self.git_project_dir() {
+            self.refresh_git_status_async(dir);
+        }
+    }
+
+    /// Native picker for a `.uproject`.
+    pub fn choose_project(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Unreal Project", &["uproject"])
+            .set_title("Select your .uproject file")
+            .pick_file()
+        else { return };
+        self.apply_project_path(path);
+    }
+
     /// Lets the user manually point at their Unreal Engine install folder —
     /// the escape hatch for "[ERROR] Engine not found." when auto-detection
     /// (registry / EngineAssociation) can't locate it, e.g. a source build or
@@ -482,17 +764,6 @@ impl DevToolApp {
         clear_engine_path();
         self.engine_override = None;
         self.redetect_engine();
-    }
-
-    /// Scans the most recently written `BuildLog.txt` (if any) for known
-    /// UAT/UBT error signatures. Pure disk read — safe on the UI thread.
-    pub fn scan_last_build_log(&mut self) {
-        self.build_log_path      = None;
-        self.build_log_diagnosis = Vec::new();
-        let Some(proj) = &self.project_path else { return };
-        let Some(log) = crate::ops::diagnostics::latest_build_log(proj) else { return };
-        self.build_log_diagnosis = crate::ops::diagnostics::scan_build_log(&log);
-        self.build_log_path      = Some(log);
     }
 
     // ── App self-check ───────────────────────────────────────────────────────
@@ -543,21 +814,100 @@ impl DevToolApp {
     /// Switches the active tab, running whatever one-time setup that tab's
     /// content needs (mirrors what the old button-triggered `open_*` methods
     /// did before there were tabs to switch between instead).
-    pub fn switch_tab(&mut self, tab: AppTab) {
-        self.active_tab = tab;
-        match tab {
-            AppTab::Dashboard => self.refresh_pc_check(),
-            AppTab::Package   => self.open_package_config(),
-            AppTab::Git       => { if matches!(self.git_state, GitState::Idle) { self.open_git_menu(); } }
-            AppTab::Chat      => self.open_chat_panel(),
-            AppTab::Extras    => {}
+    /// Which state the main surface is in. Derived, never set directly — the
+    /// surface follows the work rather than a selection.
+    pub fn run_state(&self) -> RunState {
+        if *self.is_working.lock().unwrap_or_else(|e| e.into_inner()) {
+            RunState::Running
+        } else if self.project_path.is_none() {
+            RunState::Setup
+        } else if self.last_build.is_some() {
+            RunState::Done
+        } else {
+            RunState::Ready
         }
-        // Every arm above already does a full one-time refresh of that
-        // tab's observed state on entry — reset the periodic-poll clock
-        // (see `update()`'s tick block) so it doesn't immediately fire
-        // again a frame later and redo the same work a second time.
-        self.last_tab_poll = Instant::now();
     }
+
+    /// Re-reads the project's config for packaging-readiness problems. A few
+    /// small files, so it runs inline.
+    pub fn refresh_doctor(&mut self) {
+        self.doctor_items = match &self.project_path {
+            Some(p) => crate::ops::doctor::check_project(p, self.build_target),
+            None    => Vec::new(),
+        };
+    }
+
+    /// Opens a sheet, doing whatever one-time refresh it needs on entry.
+    pub fn open_sheet(&mut self, sheet: Sheet) {
+        self.sheet = Some(sheet);
+        match sheet {
+            Sheet::Chat        => self.open_chat_panel(),
+            Sheet::Diagnostics => {
+                self.refresh_doctor();
+                self.refresh_pc_check();
+                self.refresh_clean_targets();
+            }
+            Sheet::Extras      => {
+                if self.extras_tab == ExtrasTab::SelfCheck { self.refresh_app_check(); }
+            }
+            Sheet::Browser | Sheet::Settings | Sheet::Monitor => {}
+        }
+    }
+
+    pub fn close_sheet(&mut self) {
+        self.sheet = None;
+    }
+
+    /// Measures the removable folders under the project.
+    ///
+    /// Blocking on the caller's thread would stat tens of thousands of files,
+    /// so it runs in the background like every other disk walk here.
+    pub fn refresh_clean_targets(&mut self) {
+        let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf())
+        else { return };
+        let out = Arc::clone(&self.clean_pending);
+        let ctx = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let found = crate::ops::clean::scan(&dir);
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Deletes the ticked folders.
+    pub fn start_clean(&mut self) {
+        let paths: Vec<std::path::PathBuf> = self.clean_targets.iter()
+            .zip(self.clean_selected.iter())
+            .filter(|(t, on)| **on && t.exists)
+            .map(|(t, _)| t.path.clone())
+            .collect();
+        if paths.is_empty() { return; }
+        self.clean_confirm = false;
+        self.busy_label = "Cleaning project…".into();
+        self.run_background_task("[INFO] Removing generated folders…", move || {
+            crate::ops::clean::remove(&paths)
+        });
+    }
+
+    /// Rescans `<project>/build/` on a background thread.
+    pub fn refresh_builds(&mut self) {
+        let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf())
+        else { return };
+        let out = Arc::clone(&self.builds_pending);
+        let ctx = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let found = crate::ops::history::scan(&dir);
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Clears the finished-build result, returning the surface to `Ready`.
+    pub fn dismiss_build(&mut self) {
+        self.last_build = None;
+        self.run.lock().unwrap_or_else(|e| e.into_inner()).reset();
+    }
+
 
     /// Scans a pasted log excerpt (Dashboard tab) against the same known-error
     /// table as the on-disk build-log scanner — for when the relevant log
@@ -573,19 +923,37 @@ impl DevToolApp {
         self.refresh_pc_check_disk_async();
     }
 
-    /// The cheap half of `refresh_pc_check`: pure in-process path/string
-    /// checks (`ops::preflight::run_checks`) plus an on-disk build-log
-    /// rescan (`scan_last_build_log`, a couple of `read_dir`/`read_to_string`
-    /// calls) — no process spawn, so it's safe to call directly on the UI
-    /// thread as often as needed. Split out from the disk-space check below
-    /// specifically so the Dashboard tab's periodic poll (see `update()`'s
-    /// tick block) can keep this part live on a short interval without also
-    /// spawning a PowerShell process that often — see
-    /// `refresh_pc_check_disk_async` for why that half needs a much longer
-    /// leash.
+    /// Re-runs the preflight checks and the build-log scan on a worker.
+    ///
+    /// The name is a misnomer kept for its callers: only `run_checks` is
+    /// cheap. The build-log scan opens the newest UAT log — routinely tens of
+    /// megabytes — and matches every line against the known-error table. That
+    /// used to run inline here, and the periodic poll called it every three
+    /// seconds, so the render thread stalled for the length of the read over
+    /// and over for as long as the app stayed open. It is now off-thread and
+    /// the result is drained in `pump_background_state`.
+    ///
+    /// Still split from `refresh_pc_check_disk_async`, which needs a much
+    /// longer leash because it spawns PowerShell.
     pub fn refresh_pc_check_cheap(&mut self) {
-        self.pc_check_items = crate::ops::preflight::run_checks(&self.engine_dir, &self.project_path);
-        self.scan_last_build_log();
+        let engine  = self.engine_dir.clone();
+        let project = self.project_path.clone();
+        let out     = Arc::clone(&self.pc_check_pending);
+        let ctx     = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let items = crate::ops::preflight::run_checks(&engine, &project);
+            let (log, diags) = match project.as_ref()
+                .and_then(|p| crate::ops::diagnostics::latest_build_log(p))
+            {
+                Some(log) => {
+                    let d = crate::ops::diagnostics::scan_build_log(&log);
+                    (Some(log), d)
+                }
+                None => (None, Vec::new()),
+            };
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some((items, log, diags));
+            ctx.request_repaint();
+        });
     }
 
     /// The disk-space half of `refresh_pc_check`. Needs a PowerShell spawn
@@ -693,15 +1061,22 @@ impl DevToolApp {
     /// Download the latest release exe, swap it in for the running one, and
     /// relaunch. On success the app exits; on failure the error is reported
     /// in the status area.
-    pub fn start_update_install(&mut self, download_url: String) {
+    pub fn start_update_install(&mut self, info: UpdateInfo) {
         self.show_update_banner = false;
         self.busy_label = "[ DOWNLOADING UPDATE ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
         let status   = Arc::clone(&self.status_message);
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
+        // Takes the whole `UpdateInfo` rather than just the download URL so
+        // the checksum sidecar published next to the artifact travels with it
+        // — see `ops::update::download_and_install` for why it is verified.
         self.run_background_task("Downloading update…", move || {
-            match ops_update::download_and_install(&download_url, &status, &cancel, &progress) {
+            match ops_update::download_and_install(
+                &info.download_url,
+                info.checksum_url.as_deref(),
+                &status, &cancel, &progress,
+            ) {
                 Ok(())   => std::process::exit(0),
                 Err(e)   => format!("[ERROR] Update failed: {e}"),
             }
@@ -793,10 +1168,15 @@ impl DevToolApp {
         // clobber an in-progress edit the way calling this whole function
         // on a timer would. See `refresh_package_observed` below for the
         // half of this that's safe to re-run periodically.
-        let (pack, exe, configuration) = load_project_config(&project_path);
+        let (pack, exe, configuration, target) = load_project_config(&project_path);
         self.pack_name_input = pack;
         self.exe_name_input  = exe;
         self.build_configuration = configuration;
+        self.build_target = target;
+        let (compress, extra, method) = crate::config::load_uat_options(&project_path);
+        self.compress_pak = compress;
+        self.extra_uat_args = extra;
+        self.package_method = method;
 
         self.refresh_package_observed();
         // Default the editable version field to the next auto-incremented
@@ -945,8 +1325,8 @@ impl DevToolApp {
             return;
         }
         let build_configuration = self.build_configuration;
-        save_project_config(&project_path, &pack_name, &exe_name, build_configuration);
-        self.fast_package_mode  = false;
+        let build_target        = self.build_target;
+        save_project_config(&project_path, &pack_name, &exe_name, build_configuration, build_target);
         self.task_started_at    = Some(Instant::now());
         self.busy_label = "[ PACKAGING IN PROGRESS ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
@@ -955,62 +1335,32 @@ impl DevToolApp {
         let pending_clone = Arc::clone(&self.pending_zip);
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
-        let use_space_free_link = self.use_space_free_link;
-        self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, use_space_free_link)
-        });
-    }
-
-    pub fn start_fast_packaging(&mut self) {
-        let project_path = match self.project_path.clone() { Some(p) => p, None => return };
-        if !project_path.is_file() {
-            self.set_status(format!("[ERROR] Project file not found: {}", project_path.display()));
-            return;
-        }
-        let engine_dir   = match self.engine_dir.clone() {
-            Some(e) => e,
-            None    => {
-                self.set_status("[ERROR] Engine not found.".into());
+        let run           = Arc::clone(&self.run);
+        let iterate       = self.iterate_cook;
+        let package_method = self.package_method;
+        let mut extra_args = match ops_package::parse_extra_uat_args(&self.extra_uat_args) {
+            Ok(v)  => v,
+            Err(e) => {
+                self.set_status(format!("[ERROR] Extra UAT arguments: {e}"));
                 return;
             }
         };
-        if !is_valid_engine_dir(&engine_dir) {
-            self.set_status(format!("[ERROR] Invalid Unreal Engine folder: {}", engine_dir.display()));
-            return;
+        if self.compress_pak && !extra_args.iter().any(|a| a == "-compressed") {
+            extra_args.insert(0, "-compressed".into());
         }
-        let pack_name = self.pack_name_input.trim().to_string();
-        let exe_name  = self.exe_name_input.trim().to_string();
-        if let Err(e) = ops_package::validate_leaf_name(&self.pack_name_input, "Package name") {
-            self.set_status(format!("[ERROR] {e}"));
-            return;
+        // A fresh run starts from zero stages and an empty log, and the
+        // previous result stops being the thing on screen.
+        {
+            let mut r = run.lock().unwrap_or_else(|e| e.into_inner());
+            r.reset();
+            if let Some(secs) = crate::ops::history::recent_stage_secs(&self.builds) {
+                r.seed_typical(secs);
+            }
         }
-        if let Err(e) = ops_package::validate_leaf_name(&self.exe_name_input, "Executable name") {
-            self.set_status(format!("[ERROR] {e}"));
-            return;
-        }
-        let version_str = if self.use_custom_version {
-            self.version_override.trim().to_string()
-        } else {
-            ops_package::format_version(self.next_version_preview)
-        };
-        if let Err(e) = ops_package::validate_leaf_name(&version_str, "Version") {
-            self.set_status(format!("[ERROR] {e}"));
-            return;
-        }
-        let build_configuration = self.build_configuration;
-        save_project_config(&project_path, &pack_name, &exe_name, build_configuration);
-        self.fast_package_mode  = true;
-        self.task_started_at    = Some(Instant::now());
-        self.busy_label = "[ ⚡ FAST PACKAGING ]".into();
-        if let Some(g) = &mut self.gif_player { g.reset(); }
-        if let Some(a) = &mut self.audio_player { a.set_speed(2.5); a.play_looping(); }
-        let status_clone  = Arc::clone(&self.status_message);
-        let pending_clone = Arc::clone(&self.pending_zip);
-        let cancel        = Arc::clone(&self.cancel_flag);
-        let progress      = Arc::clone(&self.progress);
+        self.last_build = None;
         let use_space_free_link = self.use_space_free_link;
-        self.run_background_task("Starting fast UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, status_clone, pending_clone, cancel, progress, use_space_free_link)
+        self.run_background_task("Starting UAT pipeline…", move || {
+            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, build_target, status_clone, pending_clone, cancel, progress, run, iterate, use_space_free_link, extra_args, package_method)
         });
     }
 
@@ -1069,6 +1419,8 @@ impl DevToolApp {
 
     pub fn open_vs_config(&mut self) {
         self.show_vs_config      = true;
+        self.sheet               = None;
+        self.show_git_sheet      = false;
         self.git_state           = GitState::Idle;
     }
 

@@ -14,6 +14,10 @@ pub enum WebPanel {
     Miku3D,
     CookieClicker,
     SponderBird,
+    /// The general-purpose browser page. Unlike the others its URL is not
+    /// fixed — [`WebViewManager::navigate`] drives it — so `url()` returns
+    /// only the page it opens on.
+    Browser,
 }
 
 impl WebPanel {
@@ -22,6 +26,7 @@ impl WebPanel {
             WebPanel::Miku3D        => "https://huklia.github.io/MikuTest/",
             WebPanel::CookieClicker => "https://orteil.dashnet.org/cookieclicker/",
             WebPanel::SponderBird   => "https://nicktam1.github.io/SponderBirdNew/",
+            WebPanel::Browser       => crate::ui::browser::HOME_URL,
         }
     }
 
@@ -30,6 +35,7 @@ impl WebPanel {
             WebPanel::Miku3D        => "3D Miku",
             WebPanel::CookieClicker => "Cookie Clicker",
             WebPanel::SponderBird   => "Sponder Bird",
+            WebPanel::Browser       => "Browser",
         }
     }
 }
@@ -216,6 +222,27 @@ impl WebViewManager {
         }
     }
 
+    /// Points the browser panel at `url`.
+    ///
+    /// The webview is created lazily by `update`, so a navigation requested
+    /// before the panel has ever been shown has nothing to act on — those are
+    /// dropped rather than queued, because the only way to trigger one is from
+    /// the Browser page, which by definition has already been rendered.
+    pub fn navigate(&mut self, url: &str) {
+        if let Some(entry) = self.views.get_mut(&WebPanel::Browser)
+            && let Ok(v) = &entry.view {
+                let _ = v.load_url(url);
+            }
+    }
+
+    /// Runs `script` in the browser panel. Used for history back/forward,
+    /// which wry does not expose directly but `window.history` does.
+    pub fn eval_in_browser(&mut self, script: &str) {
+        if let Some(entry) = self.views.get_mut(&WebPanel::Browser)
+            && let Ok(v) = &entry.view {
+                let _ = v.evaluate_script(script);
+            }
+    }
 }
 
 fn to_physical_bounds(rect: egui::Rect, ppp: f32) -> (i32, i32, u32, u32) {

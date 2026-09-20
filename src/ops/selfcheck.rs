@@ -29,8 +29,43 @@ pub fn run_checks() -> Vec<CheckItem> {
 
     items.push(leftover_binary_check());
     items.push(config_folder_check());
+    if let Some(item) = crash_log_check() { items.push(item); }
 
     items
+}
+
+/// SHA-256 of the running executable, as lowercase hex.
+///
+/// This is what to look a file up by when an antivirus flags it: compare it
+/// with the `.sha256` published beside each release, or paste it into a
+/// reputation service, without uploading the binary anywhere. Streams the file
+/// so a 100 MB executable is never held in memory.
+pub fn exe_sha256() -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(std::env::current_exe().ok()?).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    Some(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Surfaces a previous crash so it can be reported, instead of leaving the
+/// file to be discovered by accident.
+fn crash_log_check() -> Option<CheckItem> {
+    let path = crate::config::config_dir()?.join("crash.log");
+    let text = std::fs::read_to_string(&path).ok()?;
+    let last = text.lines().last()?.trim().to_string();
+    Some(CheckItem {
+        status: CheckStatus::Warn,
+        label:  "Previous crash recorded".into(),
+        detail: format!("{last}
+{}", path.display()),
+    })
 }
 
 fn install_folder_check(dir: &std::path::Path) -> CheckItem {

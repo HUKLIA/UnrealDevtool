@@ -1,7 +1,7 @@
 use eframe::egui;
 use crate::app::DevToolApp;
 use crate::theme::*;
-use crate::types::{BuildConfiguration, UploadAction};
+use crate::types::UploadAction;
 
 impl DevToolApp {
     pub fn show_upload_panel_ui(&mut self, ui: &mut egui::Ui) -> UploadAction {
@@ -14,17 +14,14 @@ impl DevToolApp {
 
         let can_go = self.upload_use_local || self.upload_use_gdrive;
 
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(14.0))
+        card()
+            .stroke(egui::Stroke::new(1.0, acc(110)))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("📤  Upload / Copy Packaged Build").size(13.0).color(accent()));
+                ui.label(heading("Upload / Copy Packaged Build", 15.0));
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!("Zip: {}", zip_name))
-                        .size(10.0).color(HINT_GRAY).monospace(),
+                        .size(10.0).color(MUTED).monospace(),
                 );
                 ui.add_space(10.0);
                 ui.separator();
@@ -33,7 +30,7 @@ impl DevToolApp {
                 // ── Local / network path ──────────────────────────────────────
                 ui.checkbox(
                     &mut self.upload_use_local,
-                    egui::RichText::new("Copy to local / network path").size(12.0).color(egui::Color32::WHITE),
+                    egui::RichText::new("Copy to local / network path").size(12.0).color(TEXT),
                 );
 
                 if self.upload_use_local {
@@ -45,7 +42,7 @@ impl DevToolApp {
                     };
                     ui.label(
                         egui::RichText::new(format!("Current: {}", current))
-                            .size(10.0).color(HINT_GRAY),
+                            .size(10.0).color(MUTED),
                     );
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
@@ -71,10 +68,22 @@ impl DevToolApp {
                 // ── Google Drive via rclone ───────────────────────────────────
                 ui.checkbox(
                     &mut self.upload_use_gdrive,
-                    egui::RichText::new("Upload to Google Drive  (via rclone)").size(12.0).color(egui::Color32::WHITE),
+                    egui::RichText::new("Upload to Google Drive  (via rclone)").size(12.0).color(TEXT),
                 );
 
                 if self.upload_use_gdrive {
+                    // rclone is no longer shipped inside this binary (see
+                    // `ops::rclone` for why), so the first thing this section
+                    // has to answer is whether it is installed at all. Until
+                    // it is, the destination field and remote status below are
+                    // meaningless, so they are replaced by a single install
+                    // prompt rather than shown in a state that cannot work.
+                    if !crate::ops::rclone::is_available() {
+                        ui.add_space(6.0);
+                        Self::show_rclone_setup_guide(ui);
+                        ui.add_space(6.0);
+                    } else {
+
                     // Check once (lazily) whether the "gdrive" remote exists —
                     // this reads rclone's local config file, so it's fast.
                     if self.gdrive_remote_status.is_none() {
@@ -82,7 +91,7 @@ impl DevToolApp {
                     }
 
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("rclone destination:").size(11.0).color(egui::Color32::GRAY));
+                    ui.label(egui::RichText::new("rclone destination:").size(11.0).color(MUTED));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.upload_rclone_dest)
                             .hint_text("gdrive:/Builds/MyGame  or a Drive folder share link")
@@ -102,8 +111,8 @@ impl DevToolApp {
                             }
                             None => {
                                 ui.colored_label(
-                                    egui::Color32::from_rgb(255, 150, 60),
-                                    "⚠ Couldn't find a folder ID in that link — paste a folder share link\n  or use rclone path syntax (gdrive:/Builds/MyGame).",
+                                    AMBER,
+                                    "Couldn't find a folder ID in that link — paste a folder share link\n  or use rclone path syntax (gdrive:/Builds/MyGame).",
                                 );
                             }
                         }
@@ -112,12 +121,12 @@ impl DevToolApp {
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(
-                            "Uses the bundled rclone (or one in PATH) with a remote named \"gdrive\".\n\
+                            "Uses rclone with a remote named \"gdrive\".\n\
                              Then either:\n\
                              •  Path syntax:   gdrive:/Builds/MobiusFish\n\
                              •  Or paste a folder share link — its folder ID is used automatically:\n\
                                 https://drive.google.com/drive/folders/<FOLDER_ID>"
-                        ).size(10.0).color(HINT_GRAY),
+                        ).size(10.0).color(MUTED),
                     );
 
                     // Remote status + one-click setup for first-time users.
@@ -129,10 +138,10 @@ impl DevToolApp {
                             }
                             Some(false) => {
                                 ui.colored_label(
-                                    egui::Color32::from_rgb(255, 150, 60),
-                                    "⚠ No \"gdrive\" remote found.",
+                                    AMBER,
+                                    "No \"gdrive\" remote found.",
                                 );
-                                if ui.add_sized([190.0, 24.0], egui::Button::new("⚙  Set up Google Drive remote…")).clicked() {
+                                if ui.add_sized([210.0, 26.0], primary("Set up Google Drive remote")).clicked() {
                                     match crate::ops::package::open_rclone_config_setup() {
                                         Ok(())   => *self.status_message.lock().unwrap_or_else(|e| e.into_inner()) =
                                             "[INFO] Opened rclone config in a new window — \
@@ -145,10 +154,11 @@ impl DevToolApp {
                             }
                             None => {}
                         }
-                        if ui.add_sized([26.0, 24.0], egui::Button::new("↻")).on_hover_text("Re-check remote status").clicked() {
+                        if ui.add_sized([26.0, 24.0], ghost("↻")).on_hover_text("Re-check remote status").clicked() {
                             self.gdrive_remote_status = None;
                         }
                     });
+                    } // end: rclone installed
                 }
 
                 ui.add_space(14.0);
@@ -156,231 +166,114 @@ impl DevToolApp {
                 // ── Action buttons ────────────────────────────────────────────
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(can_go, |ui| {
-                        if ui.add_sized([180.0, 32.0], egui::Button::new(">>  Upload / Copy")).clicked() {
+                        if ui.add_sized([180.0, 32.0], primary("Upload / Copy")).clicked() {
                             action = UploadAction::Upload;
                         }
                     });
-                    if ui.add_sized([80.0, 32.0], egui::Button::new("x  Skip")).clicked() {
+                    if ui.add_sized([90.0, 32.0], ghost("Skip")).clicked() {
                         action = UploadAction::Skip;
                     }
                 });
 
                 if !can_go {
                     ui.add_space(4.0);
-                    ui.colored_label(HINT_GRAY, "Check at least one destination above.");
+                    ui.colored_label(MUTED, "Check at least one destination above.");
                 }
             });
 
         action
     }
 
-    /// Returns `Some(false)` = start normal, `Some(true)` = start fast, `None` = no action.
-    pub fn show_package_config_panel(&mut self, ui: &mut egui::Ui) -> Option<bool> {
-        let mut action: Option<bool> = None;
-        let auto_version_label = crate::ops::package::format_version(self.next_version_preview);
-        let version_label = if self.use_custom_version {
-            self.version_override.trim().to_string()
-        } else {
-            auto_version_label.clone()
-        };
-        let version_error = crate::ops::package::validate_leaf_name(&version_label, "Version").err();
-        let version_valid = version_error.is_none();
-        let pack_name_error = crate::ops::package::validate_leaf_name(
-            &self.pack_name_input,
-            "Package name",
-        )
-        .err();
-        let exe_name_error = crate::ops::package::validate_leaf_name(
-            &self.exe_name_input,
-            "Executable name",
-        )
-        .err();
-        let pack_preview  = format!(
-            "-> build/{}/{}/   and   {}_{}.zip",
-            version_label,
-            self.pack_name_input.trim(),
-            self.pack_name_input.trim(),
-            version_label,
-        );
-        let exe_preview = format!("-> {}.exe", self.exe_name_input.trim());
-        let can_start   = pack_name_error.is_none() && exe_name_error.is_none() && version_valid;
-
-        // Package name / exe name / build configuration are USER-OWNED
-        // state (see `refresh_package_observed`'s doc comment for the
-        // observed/user-owned split this whole tab is built around) — they
-        // used to be persisted only when the user actually clicked "Start
-        // Packaging"/"Fast Package" (`start_packaging`/`start_fast_packaging`
-        // in app.rs). That meant editing the package name, the exe name, or
-        // the Development/Shipping radio and then just switching tabs
-        // without packaging silently discarded the edit: `open_package_config`
-        // reloads these fields from disk on every re-entry to this tab, so
-        // the reload would win over whatever the user last typed. Saving on
-        // every actual change (not every frame — gated on `.changed()`)
-        // closes that gap, mirroring the existing save-on-change pattern in
-        // `ui::extras::show_quick_links` (`if changed { self.save_links(); }`).
-        let mut settings_changed = false;
-
-        ui.columns(2, |cols| {
-            card_frame().show(&mut cols[0], |ui| {
-                ui.label(egui::RichText::new("📦  Package Configuration").size(13.0).color(accent()));
-                ui.add_space(10.0);
-
-                ui.label(egui::RichText::new("Package / folder name:").size(11.0).color(egui::Color32::GRAY));
-                settings_changed |= ui.add(egui::TextEdit::singleline(&mut self.pack_name_input).desired_width(f32::INFINITY)).changed();
-                ui.label(egui::RichText::new(&pack_preview).size(10.0).color(HINT_GRAY));
-                if let Some(error) = &pack_name_error {
-                    ui.colored_label(ERR_RED, error);
-                }
-                ui.add_space(8.0);
-
-                ui.label(egui::RichText::new("Executable name  (.exe):").size(11.0).color(egui::Color32::GRAY));
-                settings_changed |= ui.add(egui::TextEdit::singleline(&mut self.exe_name_input).desired_width(f32::INFINITY)).changed();
-                ui.label(egui::RichText::new(&exe_preview).size(10.0).color(HINT_GRAY));
-                if let Some(error) = &exe_name_error {
-                    ui.colored_label(ERR_RED, error);
-                }
-                ui.add_space(8.0);
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Version:").size(11.0).color(egui::Color32::GRAY));
-                    if self.use_custom_version {
-                        ui.add(egui::TextEdit::singleline(&mut self.version_override).desired_width(80.0));
-                    } else {
-                        ui.colored_label(accent(), &auto_version_label);
-                        ui.label(egui::RichText::new("(auto-incremented)").size(10.0).color(HINT_GRAY));
-                    }
-                    if ui.checkbox(&mut self.use_custom_version, "Custom").changed()
-                        && self.use_custom_version
-                        && self.version_override.trim().is_empty()
-                    {
-                        self.version_override = auto_version_label.clone();
-                    }
-                });
-                if self.use_custom_version && let Some(error) = &version_error {
-                    ui.colored_label(ERR_RED, error);
-                }
-                ui.add_space(12.0);
-
-                ui.label(egui::RichText::new("Build configuration:").size(11.0).color(egui::Color32::GRAY));
-                ui.horizontal(|ui| {
-                    settings_changed |= ui.radio_value(
-                        &mut self.build_configuration,
-                        BuildConfiguration::Development,
-                        "Development",
-                    ).changed();
-                    settings_changed |= ui.radio_value(
-                        &mut self.build_configuration,
-                        BuildConfiguration::Shipping,
-                        "Shipping",
-                    ).changed();
-                });
-                ui.label(
-                    egui::RichText::new(match self.build_configuration {
-                        BuildConfiguration::Development => "Debug-friendly build for testing.",
-                        BuildConfiguration::Shipping => "Optimized build for release.",
-                    })
-                    .size(10.0)
-                    .color(HINT_GRAY),
-                );
-                ui.add_space(12.0);
-
-                self.show_space_warning_inline(ui);
-
-                // ── Editor-open warning ───────────────────────────────────────
-                if self.editor_is_running {
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(45, 35, 15))
-                        .stroke(egui::Stroke::new(1.0, WARN_AMBER))
-                        .rounding(egui::Rounding::same(6.0))
-                        .inner_margin(egui::Margin::same(10.0))
-                        .show(ui, |ui| {
-                            ui.colored_label(WARN_AMBER, "⚠  Unreal Editor is open");
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "The editor will be closed automatically before packaging.\n\
-                                     Save all your work first (Ctrl+S in the editor), then start the build."
-                                ).size(10.5).color(egui::Color32::from_rgb(210, 190, 140)),
-                            );
-                        });
-                    ui.add_space(8.0);
-                } else {
-                    ui.colored_label(accent(), "Unreal Editor will be closed before packaging.");
-                }
+    /// Shown in place of the destination fields when rclone is not installed.
+    ///
+    /// This app deliberately does not download or install rclone (see
+    /// `ops::rclone` for the antivirus reasoning) — it points at the official
+    /// download and walks through the one-time setup instead. Both are real
+    /// links rather than instructions to go searching.
+    fn show_rclone_setup_guide(ui: &mut egui::Ui) {
+        // Still bounded, so the guide wraps against whatever it is given
+        // rather than measuring its longest step unbounded.
+        const FRAME_CHROME: f32 = 22.0; // 10px inner margin each side + stroke
+        let inner_w = (ui.available_width() - FRAME_CHROME).max(180.0);
+        callout(AMBER).show(ui, |ui| {
+            ui.set_max_width(inner_w);
+            ui.horizontal(|ui| {
+                dot(ui, AMBER, 10.0);
+                ui.label(egui::RichText::new("rclone is not installed")
+                    .size(11.5).color(AMBER).strong());
             });
+            ui.add_space(6.0);
+            ui.label(hint(
+                "Google Drive uploads are driven by rclone, a separate free tool. \
+                 It is a one-time setup and this app never installs it for you.",
+            ));
 
-            card_frame().show(&mut cols[1], |ui| {
-                ui.vertical_centered(|ui| {
-                    let progress = *self.progress.lock().unwrap_or_else(|e| e.into_inner());
-                    let stage = if progress >= 1.0 { "Last run completed" } else { "UAT BuildCookRun pipeline" };
-                    crate::ui::circular_meter::show_circular_meter(ui, progress, stage);
+            ui.add_space(10.0);
+            if ui.add_sized([210.0, 30.0], primary("Open rclone.org/downloads")).clicked() {
+                crate::ops::open_url(crate::ops::rclone::DOWNLOAD_URL);
+            }
+
+            ui.add_space(12.0);
+            ui.label(eyebrow("ONE-TIME SETUP"));
+            ui.add_space(6.0);
+
+            for (n, step) in [
+                "Download the Windows AMD64 zip from the page above and unzip it.",
+                "Put rclone.exe somewhere permanent — anywhere on your PATH, or \
+                 simply next to this app's .exe, which is the easiest option.",
+                "Open a terminal and run  rclone config",
+                "Choose  n  for a new remote and name it exactly  gdrive",
+                "Pick  Google Drive  from the storage list.",
+                "Leave client_id and client_secret blank (press Enter twice) unless \
+                 you have your own Google Cloud credentials.",
+                "Choose scope  1  (full access), accept the remaining defaults, and \
+                 say  y  to authorise — a browser opens for you to sign in.",
+                "Back here, tick Upload to Google Drive and enter a destination such \
+                 as  gdrive:/Builds/MyGame  — or paste a Drive folder share link.",
+            ].iter().enumerate() {
+                ui.horizontal_top(|ui| {
+                    ui.label(egui::RichText::new(format!("{}.", n + 1))
+                        .size(10.5).monospace().color(accent()));
+                    ui.add_space(2.0);
+                    ui.add(egui::Label::new(hint(step)).wrap());
                 });
-                ui.add_space(10.0);
-                ui.vertical_centered(|ui| {
-                    ui.add_enabled_ui(can_start, |ui| {
-                        if ui.add_sized([220.0, 34.0], egui::Button::new(">>  Start Packaging")).clicked() {
-                            action = Some(false);
-                        }
-                        ui.add_space(6.0);
-                        if ui.add_sized([220.0, 34.0], egui::Button::new("⚡  Fast Package")).clicked() {
-                            action = Some(true);
-                        }
-                    });
-                    ui.add_space(6.0);
-                    if ui.add_sized([220.0, 28.0], egui::Button::new("x  Cancel")).clicked() {
-                        self.switch_tab(crate::types::AppTab::Dashboard);
-                    }
-                });
+                ui.add_space(3.0);
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.add_sized([170.0, 26.0], ghost("Google Drive setup docs")).clicked() {
+                    crate::ops::open_url(crate::ops::rclone::DRIVE_DOCS_URL);
+                }
+                ui.add_space(4.0);
+                ui.label(hint("Restart this app once rclone.exe is in place."));
             });
         });
-
-        // Persist the moment any of the four fields above actually change
-        // (see the comment on `settings_changed`'s declaration) rather than
-        // only when the user clicks Start/Fast Package — `.changed()` only
-        // fires on the frame a value is edited, so this never writes the
-        // config file on frames where nothing happened. `self.project_path`
-        // is guaranteed `Some` here in practice (the caller, `show_package_tab`,
-        // already bails out before reaching this panel when it's `None`),
-        // but re-checking rather than assuming keeps this function safe to
-        // call on its own regardless of that caller invariant.
-        if settings_changed && let Some(project_path) = self.project_path.clone() {
-            crate::config::save_project_config(
-                &project_path,
-                self.pack_name_input.trim(),
-                self.exe_name_input.trim(),
-                self.build_configuration,
-            );
-        }
-
-        action
     }
 
     pub fn show_open_folder_panel(&mut self, ui: &mut egui::Ui) {
         let path = self.pending_open_folder_path.clone();
         let display = path.to_string_lossy().to_string();
 
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(14.0))
+        card()
+            .stroke(egui::Stroke::new(1.0, acc(110)))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("📁  Packaging complete!").size(13.0).color(accent()));
+                ui.label(heading("Packaging complete!", 15.0));
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!("Output: {}", display))
-                        .size(10.0).color(HINT_GRAY).monospace(),
+                        .size(10.0).color(MUTED).monospace(),
                 );
                 ui.add_space(10.0);
-                ui.label(egui::RichText::new("Open the output folder?").size(12.0).color(egui::Color32::WHITE));
+                ui.label(egui::RichText::new("Open the output folder?").size(12.0).color(TEXT));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.add_sized([140.0, 32.0], egui::Button::new("📂  Yes, open")).clicked() {
+                    if ui.add_sized([140.0, 32.0], primary("Yes, open")).clicked() {
                         let _ = crate::ops::cmd("explorer").arg(&path).spawn();
                         self.show_open_folder_panel = false;
                         self.show_upload_panel      = true;
                     }
-                    if ui.add_sized([140.0, 32.0], egui::Button::new("—  No, skip")).clicked() {
+                    if ui.add_sized([140.0, 32.0], ghost("No, skip")).clicked() {
                         self.show_open_folder_panel = false;
                         self.show_upload_panel      = true;
                     }
@@ -392,17 +285,14 @@ impl DevToolApp {
     /// remote configured, network blocked, etc.) — offers a manual fallback
     /// instead of leaving the user with only an error string to puzzle over.
     pub fn show_upload_fallback_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, WARN_AMBER))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(14.0))
+        card()
+            .stroke(egui::Stroke::new(1.0, tint(AMBER, 110)))
             .show(ui, |ui| {
-                ui.colored_label(WARN_AMBER, "⚠  Google Drive upload failed");
+                ui.colored_label(AMBER, "Google Drive upload failed");
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new("See Status / Output below for the exact reason. Upload manually instead:")
-                        .size(11.0).color(HINT_GRAY),
+                        .size(11.0).color(MUTED),
                 );
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -415,7 +305,7 @@ impl DevToolApp {
                     }
                 });
                 ui.add_space(8.0);
-                if ui.add_sized([160.0, 26.0], egui::Button::new("↻  Retry upload")).clicked() {
+                if ui.add_sized([160.0, 28.0], primary("Retry upload")).clicked() {
                     self.show_upload_fallback_panel = false;
                     self.show_upload_panel          = true;
                 }

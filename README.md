@@ -2,30 +2,190 @@
 
 A Windows desktop tool for Unreal Engine 5 developers: packages builds, regenerates Visual Studio project files, manages Git, and includes a few extras — all from one GUI.
 
+**Highlights:** three ways to package (full UAT, compile-first with UnrealBuildTool, or restage the last cook) for Windows, Android and Linux · live progress from UAT's own stages · a **Project monitor** (processes, editor log, folder health) · failures that explain themselves · a `Ctrl+K` command palette · scheduled builds · an in-app guided manual.
+
 > **Study & research project. Not for production.**
 > Feel free to use it for testing or as a reference for your own work.
 
 ---
 
-## UI
+## A tour of the app
 
-A brief animated boot-log splash (built from what was actually detected — your real project/engine/git state, not placeholder text) leads into the main window: a dark "glass panel" theme with a teal accent, a faint background tech-grid, and a soft corner glow. The window opened wide (~1040×760) for a multi-column "bento grid" desktop layout — Dashboard and Package show side-by-side cards, Chat and Extras use a left sidebar + main content area — organized into five tabs instead of one long scrolling button list. Tab content fades in on switch. The window centers itself on the monitor once at launch, and is otherwise completely free to move/resize — it never repositions itself again after that first frame.
+Everything happens on one screen that follows your build. Here it is, in the order you meet it. (The *Running* and *Finished / Failed* screens are shown with sample data so they could be captured without a 30-minute build.)
 
-| Tab | Contents |
+### 1. Ready — set up the build
+
+![The Ready screen: platform, configuration and method chips, package names, the four-stage pipeline and the Start build button, with source control and recent builds on the right](docs/images/ready.png)
+
+| Where | What it does |
 |---|---|
-| **Dashboard** | Two-row bento grid: project path + engine path side by side (with **Browse…** overrides), **Rebuild VS Files**, then preflight diagnostics + a build-log scanner side by side (engine/project validity, disk space, the space-in-path UAT bug, a scan of the most recent build log against known UAT/UBT error signatures, and a box to paste an arbitrary log excerpt to scan instead) |
-| **Package** | Left: package/exe name, version (auto-incremented or custom), the space-fix warning. Right: a custom-painted circular progress ring (0% idle / holds at 100% after a run — the actual *live* packaging progress still uses the full-screen Miku view, unchanged) plus **Start Packaging** / **Fast Package** |
-| **Git** | Commit & push, sync with main (fetch → rebase → push, fully automatic), merge current branch into main |
-| **Chat** | Dev Assistant — left sidebar shows detected LLM servers as selectable cards (auto-detects Ollama `:11434` and LM Studio `:1234`) plus a live "context injected" preview (project/engine/space-warning/git branch); right side is the chat itself, streaming responses with that same context sent on every message |
-| **Extras** | Left sidebar: Miku Visualizer (2D GIF / 3D WebGL toggle), Mini-Games (Cookie Clicker, Sponder Bird), **App Self-Check** (the DevTool's own install/config/update health — separate from Dashboard's project/engine diagnostics), DM on Discord, Customize (GIF/sound overrides, accent color — five presets or a full picker), and **Quick Links** underneath |
+| **Platform chips** (Windows · Android · Linux · Mac) | What to build for. Mac is greyed out — Unreal cannot cross-compile it from Windows. |
+| **Shipping / Development**, **Iterate**, **Auto-version** | Build configuration; reuse the previous cook for a faster rebuild; auto-number the version. |
+| **Method** | *Full package*, *Compile, then package*, or *Restage last cook* — see [Packaging methods](#packaging-methods). |
+| **Package / Exe** | The output folder and zip name, and the game executable's name. |
+| **Advanced** | Compress pak, extra UAT arguments, and *Start at* to schedule an unattended build. |
+| **Start build** | The one primary action. `Ctrl+Enter` does the same. |
+| **Right rail** | Source control (branch, ahead/behind, Sync) and your past builds. Click a build to open its folder; hover for how it was made. |
 
-Engine detection reads `EngineAssociation` from the `.uproject` file to auto-find the exact matching engine via the registry. If auto-detection can't find it (non-standard install, source build, missing launcher registry keys), Browse… lets you point at the engine folder manually — the override persists and always wins over auto-detection until cleared.
+### 2. Running — watch it work
+
+![The Running screen: step 2 of 4 with a progress percentage and elapsed time, the pipeline filling per stage, a live colour-coded log, and stage timing plus a Cancel button on the right](docs/images/running.png)
+
+The pipeline fills from UAT's own stage banners, not a timer. The log is coloured (warnings amber, errors red) and follows the newest line. **Stage timing** and the warning and error counts update live on the right. **Cancel build** asks for a second click, so one stray click cannot end a 30-minute run.
+
+### 3. Finished — ship it
+
+![The Finished screen: Build complete, size, warnings and errors, the zip's path, and Open folder, Upload to Drive and Build again actions](docs/images/done.png)
+
+You get the size, warnings, errors, the artifact path (with **Copy**), and per-stage timing. **Open build log** and **Copy report** are always there, and **Run this build** starts a packaged Windows game. Under *Ship it*, **Then set up a build for…** switches the same project to another platform in one click.
+
+### 3b. Failed — see why, right here
+
+![The Failed screen: Build failed, a What went wrong card with the first error lines, and Try again and Project checks actions](docs/images/failed.png)
+
+A failed build explains itself. The *What went wrong* card shows the recognised cause and its fix when the log matches a known error, plus the first errors UAT printed. Nothing is offered to ship.
+
+### 4. Project monitor — watch the project live
+
+![The Project monitor: Unreal processes with CPU and memory graphs, folder sizes, and the live editor log](docs/images/monitor.png)
+
+The pulse icon in the top bar opens it. **Unreal processes** shows the editor, cook, shader workers and compilers with CPU and memory; **Project** shows folder sizes, your latest edits and any crash; **Editor log** tails `Saved/Logs` live with All / Warnings / Errors filters and Pause. (The two processes in this screenshot are stand-ins started only to fill the panel.)
+
+### 5. Command palette — do anything by typing
+
+![The command palette: a search box over a list of actions such as Open project monitor, Open settings, Start build and Platform: Android](docs/images/palette.png)
+
+`Ctrl+K` opens it from anywhere. Type a few words — `android`, `restage`, `monitor`, `sync` — and press `Enter`. *Start build* is deliberately not the first entry, so `Ctrl+K`, `Enter` can never start a build by accident.
+
+### 6. The manual — a guided tour inside the app
+
+![The in-app manual: a callout titled Configure the build pointing at the build card, with Back and Next buttons](docs/images/guide.png)
+
+The **?** icon (or `F1`) opens a 14-step spotlight tour. Each step dims the window, points at the real control it describes, and opens the page it is about. Move with **Back / Next** or the arrow keys; `Esc` leaves.
+
+### 7. Any window size
+
+![The same Ready screen in a narrow window, with the build and the rail stacked into one scrolling column](docs/images/narrow.png)
+
+Wide windows put the build beside the rail. Narrow ones stack them into one scrolling column and fold the top bar into two rows, so nothing is clipped down to the minimum window size.
+
+### Top-bar icons
+
+| Icon | Opens |
+|---|---|
+| **?** | The manual |
+| **Pulse** | Project monitor |
+| **Tick** | Project setup & checks — change the project or engine, preflight results, packaging readiness, clean-up, log scanner |
+| **Gear** | Settings — Miku image and sound, accent colour |
+| **Globe** | Built-in browser for ChatGPT, Claude, Gemini and the Unreal docs |
+| **Speech bubble** | Dev Assistant (a local LLM that is given your project as context) |
+| **Dots** | Extras — visualiser, mini-games, Quick Links, self-check, Discord |
 
 ---
 
+## UI
+
+A short boot-log splash hands over by itself into the app's one screen.
+
+**The main surface is the build, and it follows the job.** There are no tabs:
+Ready → Running → Finished are three states of a single screen, derived from
+what the work is actually doing rather than chosen from a nav.
+
+| State | What it shows |
+|---|---|
+| **Setup** | Nothing is configured, so there is exactly one thing on screen: pick a `.uproject`, plus recents. |
+| **Ready** | The build you are about to make — name, version, configuration as chips — an idle four-stage pipeline, one primary action, and prechecks condensed to a single line. |
+| **Running** | The same surface becomes a build console: the pipeline fills per stage from UAT's own phase banners, with a live, colour-coded tail of its output. Miku moves into the rail instead of taking over the window. |
+| **Finished** | The run becomes a result: size, warnings, errors, the artifact path with a copy button, per-stage timing, and three equal **Ship** actions. |
+
+Beside it sits a **rail**: source control reduced to what you check before a
+build (branch, ahead/behind, Sync/Commit), and the builds already on disk.
+
+**There is no sidebar.** Chat, Browser, Extras, Settings, and Project setup &
+checks are compact top-bar icons that open as sheets *over* the work. The `?`
+icon opens the in-app manual, a 14-step spotlight tour: each step dims the
+rest of the window, points an arrow at the live control it describes, and
+opens the page it is about (Project checks, Assistant, Browser, Extras,
+Settings). Move with **Back** / **Next** or the arrow keys; **Escape** leaves. Close a
+sheet, click outside it, or press **Escape** to return to the build without
+losing your place. The full git flow and post-build prompts take the surface
+because each is one focused decision.
+
+The only build action is **Start build**. It runs Unreal's UAT
+`BuildCookRun` for the chosen **platform** (Windows, Android, Linux; Mac is
+disabled because Unreal cannot cross-compile it from Windows) and
+configuration; the live stage pipeline and log stay visible while it runs.
+**Iterate** reuses the previous cook and rebuilds only what changed — much
+faster, but use a full cook for anything you ship.
+
+**The layout adapts to the window.** Wide windows show the build beside the
+rail, each scrolling on its own. Below roughly 630 px the two stack into one
+scrolling column, and the top bar folds into two rows, so nothing is clipped
+at any size down to the 700 px minimum. Every surface keeps a fixed gutter, so a
+card border never touches the window edge.
+
+Typography is Space Grotesk for the UI and JetBrains Mono for every path,
+version and log line, both bundled. egui's stock face was a large part of why
+the app read as an unstyled debug tool whatever the layout did.
+
+Motion follows Rumi's rules — only opacity and transform, on one easing curve.
+The surface cross-fades and rises between states; hover, selection and the nav
+rail interpolate rather than switch.
+
+## Build results
+
+A finished build tells you what happened without opening a log:
+
+- **Failed builds** show *What went wrong*: the recognised cause and its fix when the log matches a known signature, plus the first error lines UAT printed. Nothing is offered to ship; you get *Try again* and *Project checks*.
+- **Open build log** and **Copy report** (project, version, platform, configuration, per-stage timing, causes, first errors) are on every result.
+- **The taskbar flashes** when a build finishes while the window is in the background.
+- **Cancel asks twice**, so one stray click does not end a 25-minute build.
+- Each build folder gets a small `build-info.txt` (platform, configuration, duration, per-stage seconds). Hovering a build in the rail shows it, and the next run's progress bars are paced from your last successful build instead of fixed guesses.
+
+**Advanced** (collapsed on the Ready surface): a *Compress pak* switch and a box for extra UAT arguments. Arguments must start with a dash, cannot contain shell metacharacters (`& | < > ^ %` or quotes), and cannot override options the controls already own (`-platform`, `-project`, …).
+
+Selecting **Android** or **Linux** adds a toolchain check to the prechecks (SDK/NDK or `LINUX_MULTIARCH_ROOT`) — the most common reason a first non-Windows build fails late.
+
+**Shortcuts and input:** `Ctrl+K` opens the **command palette** — every action in the app (sheets, platform, method, configuration, Iterate, launch the editor, open folders, sync, copy the last report) reachable by typing, with no extra buttons on any page. *Start build* is deliberately not its first entry, so `Ctrl+K`, `Enter` can never start a build by accident. `Ctrl+Enter` starts a build from the Ready surface, `F1` opens the manual, and dropping a `.uproject` (or its folder) onto the window opens it.
+
+**Scheduled builds** (*Advanced* → *Start at*): enter a time such as `23:30` and the build starts then, if the app is still open on the Ready screen. It says so in the status bar if it had to skip.
+
+**Self-check** (Extras) shows the SHA-256 of the running executable with *Look up on VirusTotal* (a lookup by hash — the file is not uploaded), and reports any previous crash recorded in `crash.log`.
+
+## Packaging methods
+
+The **Method** row on the Ready surface chooses how the project is packaged. All three end in the same staged, paked and zipped folder.
+
+| Method | What it runs | Use it when |
+|---|---|---|
+| **Full package** | One `RunUAT BuildCookRun` does everything: compile, cook, stage, pak, archive. | The default, and what Unreal's own Project Launcher runs. |
+| **Compile, then package** | `Build.bat` (UnrealBuildTool) builds the editor target, then the game target; then UAT cooks and packages with `-skipbuild`. | You want a compile error to fail in a couple of minutes with compiler output, not 20 minutes in. Blueprint-only projects skip the compile automatically. |
+| **Restage last cook** | UAT with `-skipbuild -skipcook`, re-staging what is already in `Saved/Cooked`. | Only packaging settings or staged files changed. Minutes, not a full run. It refuses to start if there is no cook for the platform. |
+
+Every step of every method runs through the same runner, so output goes to one `BuildLog.txt`, the stage pipeline and progress work identically, and Cancel kills the whole process tree.
+
+## Project monitor
+
+The pulse icon in the top bar opens a live view of the project. It only reads — it never attaches to or signals the editor — and it polls only while the sheet is open.
+
+- **Unreal processes** — editor, cook commandlet, shader workers, UBT/UAT, compiler and linker — each with CPU and memory, plus sparklines of the last couple of minutes.
+- **Editor log**, tailed from `Saved/Logs/<Project>.log` as it is written, with All / Warnings / Errors filters, Pause, Copy and Open. On a large existing log it reads only the tail. Shaders left to compile and packages left to cook are pulled out of the log as live counters.
+- **Project health** — folder sizes (Content, Source, Config, Intermediate, Saved, Binaries, DerivedDataCache), your latest edits and how many files changed in the last ten minutes, and the newest crash under `Saved/Crashes`. The folder scan pauses while a build is running.
+- **Launch editor** opens the project with the detected engine's `UnrealEditor.exe`.
+
+## Packaging readiness
+
+*Project setup & checks* also lists problems in the project's own config that break or spoil a package: an unreadable `.uproject`, a code project with no `Source` folder, no default map (or one that does not exist under `Content`), and — when building for Android — the template package name `com.YourCompany.[PROJECT]`. The prechecks strip shows a count. After a successful build, the result offers one click to set up the same project for another platform.
+
 ## Quick Links
 
-Fully user-editable — click **✏ Edit** under Quick Links (Extras tab) to rename, retarget, add, or remove any of them; changes save immediately to `links.json`. Seeded by default with Claude, ChatGPT, Gemini, Epic Games, and the Unreal docs assistant (real URLs), plus Trello, Jira, Task List, and Requirement Check (empty URL — there's no universal default for a team's own board/doc, so these start unset). Clicking a link with no URL set opens the editor instead of navigating nowhere.
+Fully user-editable — open **Extras → Quick Links**, then click **Edit** to
+rename, retarget, add, or remove any of them; changes save immediately to
+`links.json`. Seeded by default with Claude, ChatGPT, Gemini, Epic Games, and
+the Unreal docs assistant (real URLs), plus Trello, Jira, Task List, and
+Requirement Check (empty URL — there's no universal default for a team's own
+board/doc, so these start unset). Clicking a link with no URL set opens the
+editor instead of navigating nowhere.
 
 ---
 
@@ -39,7 +199,7 @@ Check PC Setup (and the config panels for Package/Rebuild VS Files) detect this 
 
 ## Package versions
 
-Choose **Development** for a debug-friendly test build or **Shipping** for an optimized release build. The last used choice is remembered per project and passed to Unreal's UAT client and server configuration flags.
+Choose **Development** for a debug-friendly test build or **Shipping** for an optimized release build. The last used configuration and platform are remembered per project and passed to Unreal's UAT client and server configuration flags.
 
 Versions auto-increment as `v0.0.1`, `v0.0.2`, … based on existing build folders. You can also enter a custom version before packaging. The version string is validated — it cannot be empty or contain characters that are illegal in Windows file names (`\ / : * ? " < > |`).
 
@@ -71,19 +231,35 @@ src/
   main.rs         entry point, window setup
   app.rs          DevToolApp state + all non-UI action methods
   ui/             egui panels (one module per feature area)
-    mod.rs          tab bar + routing, project/engine path rows, media/DM panels
+    mod.rs          frame/update loop and surface routing
+    shell.rs        top bar, sheets, and overlay controls
     intro.rs         boot-log splash screen
-    dashboard.rs      Dashboard tab (project/engine rows + inline diagnostics)
-    package.rs        Package tab config panel, upload panel, post-package prompts
-    vs.rs             VS-rebuild config panel (opened from the Dashboard tab)
-    git.rs            Git tab panels
-    chat.rs           Chat tab (Dev Assistant)
-    extras.rs         Extras tab sidebar nav + Quick Links (editable) + Miku/Games sub-panels
-    circular_meter.rs Custom-painted progress ring (Package tab)
-    preflight.rs      Check PC Setup content, space-fix warning box
+    setup.rs          first-run project picker and recent projects
+    run.rs            Ready/Running/Finished build surface
+    rail.rs           build context, source control, and recent-build rail
+    dashboard.rs      project setup and preflight diagnostics sheet
+    package.rs        upload panel and post-package prompts
+    vs.rs             Visual Studio rebuild configuration panel
+    git.rs            Git flow panels
+    chat.rs           Dev Assistant sheet
+    browser.rs        embedded browser sheet
+    guide.rs          in-app manual (spotlight tour across pages)
+    monitor.rs        Project monitor sheet
+    palette.rs        command palette (Ctrl+K)
+    panels.rs         upload / open-folder / web panels shared by surfaces
+    extras.rs         Extras sheet, Quick Links, Miku, and games
+    bar_chart.rs      Git activity chart
+    preflight.rs      PC checks and space-fix warning box
     selfcheck.rs      App Self-Check panel (an Extras sub-tab)
   ops/            everything that isn't UI — file/process/network work
-    package.rs       UAT BuildCookRun, zip, upload
+    package.rs       packaging methods (UAT / UBT + UAT / restage), step runner, in-process zip, upload
+    monitor.rs       live process, editor-log and project-folder monitor
+    clock.rs         local time of day, for scheduled builds
+    doctor.rs        packaging-readiness checks on the project's config files
+    run.rs           live UAT log tail and stage detection
+    history.rs       past builds on disk (size, age)
+    clean.rs         regenerable-folder cleanup
+    rclone.rs        rclone detection for uploads
     vs.rs            GenerateProjectFiles.bat / Build.bat
     git.rs           git plumbing
     preflight.rs      space-in-path fix, disk space, PC-setup checks
@@ -91,13 +267,33 @@ src/
     llm.rs            Ollama / LM Studio client (provider detection, streaming chat)
     selfcheck.rs      app-itself diagnostics
     update.rs         GitHub release check, self-update, old-binary cleanup
-    discord.rs        DM-on-Discord
+    discord.rs        opens Discord via its URL handler (no scripting)
   engine.rs       Unreal Engine detection (registry / EngineAssociation)
   config.rs       all persisted settings (%APPDATA%\UnrealDevTool)
   types.rs        shared enums (GitState, IdeChoice, ...)
   theme.rs        colors, accent color persistence
   audio.rs, gif.rs, webview.rs   media playback, embedded WebView2 panels
 ```
+
+---
+
+## Releasing
+
+The version lives in one place: `version` in `Cargo.toml` (currently **1.0.1**). Every push to `main` runs the *Build and Release* workflow, which reads that version and publishes `v<version>` with the exe and its SHA-256. If that tag already exists — a docs-only push, say — the workflow does nothing, so a release is never silently replaced. To ship a new release, bump `Cargo.toml` (`1.0.1` → `1.0.2`) and push.
+
+The in-app updater compares whole versions (major, minor, patch), so `v1.0.1` correctly counts as newer than the old `v0.0.<n>` builds and existing installs are offered it.
+
+---
+
+## Regenerating the screenshots
+
+The images in `docs/images/` come from a **debug** build, which accepts a `UDT_DEMO` environment variable so a screen can be opened without doing the work that produces it: `ready`, `running`, `ok`, `failed`, `monitor`, `checks`, `extras`, `palette` or `guide`. For example:
+
+```powershell
+$env:UDT_DEMO = "running"; cargo run
+```
+
+The switch does not exist in release builds. Crop the window border and the status bar (it shows local paths) before committing new images.
 
 ---
 
@@ -134,7 +330,17 @@ Follow the prompts: select **Google Drive**, paste your OAuth Client ID and Secr
 gdrive:/Builds/MyGame
 ```
 
-rclone must be in your `PATH`. The remote name must match the prefix you used in the destination field.
+**This app does not ship, download or install rclone.** It only looks for one
+you installed yourself, in this order: a copy left in
+`%APPDATA%\UnrealDevtool\rclone\` by an older build, then an `rclone.exe`
+sitting next to the app, then your `PATH`.
+
+When none is found, the **Google Drive upload** section on the Package page (and
+the post-build upload panel) shows a single button that opens
+<https://rclone.org/downloads/>, followed by the numbered one-time setup above.
+Drop `rclone.exe` on your `PATH` or next to this app's `.exe` and restart.
+
+The remote name must match the prefix you used in the destination field.
 
 If an upload fails (expired auth, no permission on the destination, network blocked, etc.), the Status/Output box shows rclone's actual error and a fallback panel offers to open the build folder and Google Drive in your browser for a manual upload, or retry.
 
@@ -155,8 +361,35 @@ If an upload fails (expired auth, no permission on the destination, network bloc
 - Engine detection reads `EngineAssociation` from the `.uproject` file to find the exact matching engine version; a manually-picked engine folder (via Browse…) persists across restarts and always wins over auto-detection until cleared
 - Force push to main is intentionally not implemented
 - The exe is fully portable — no installer or runtime needed (WebView2 aside)
-- The exe bundles rclone.exe (~75 MB), so it's a large download — everything still runs from the single file with no separate assets to manage
-- rclone.exe is extracted to `%APPDATA%\UnrealDevtool\` on first use
+- rclone is neither bundled nor downloaded — you install it yourself and the app links you to it. It used to be compiled into the binary, which made the download ~97 MB; it is now ~18 MB
+
+---
+
+## Antivirus false positives
+
+Windows Defender and other engines sometimes flag this app. It is a false positive, and the causes are understood.
+
+**What was fixed.** The binary used to embed a full 79 MB copy of `rclone.exe` in its data section with `include_bytes!`, write it to `%APPDATA%` on first use, and execute it. That is, behaviourally and structurally, a textbook dropper — an executable carrying a packed executable payload that it unpacks to disk and runs — and it is the strongest signal any scanner could have picked up here. rclone is also dual-use (ransomware crews use it to exfiltrate data) and is itself detected as riskware by several vendors, so the embedded copy was flagged *inside* our binary before it was ever extracted. The app no longer ships, downloads or installs rclone at all — it links to rclone.org and you install it yourself, so the one process that writes an executable to your machine is your own deliberate act. That alone took the executable from ~97 MB to ~18 MB; an unsigned 97 MB binary draws suspicion on size alone.
+
+**Second round: no scripts, no keystrokes.** Three more behaviours that look like malware to a scanner were removed:
+
+- **Discord.** The composer used to write a PowerShell script to `%TEMP%`, run it hidden with `-ExecutionPolicy Bypass`, and use `SendKeys` to type into Discord. A dropped script, a hidden interpreter with the policy bypassed and synthetic keystrokes into another application together are the classic keylogger/RAT shape. It now opens Discord through its URL handler and puts your message on the clipboard for you to paste.
+- **Zipping.** Builds were zipped by launching `powershell Compress-Archive`. They are now zipped in-process (deflate, zip64), which is also faster to start, works on files over 4 GB, and can be cancelled mid-archive.
+- **Disk space.** Read by spawning PowerShell; now a direct `GetDiskFreeSpaceExW` call.
+
+The app no longer starts PowerShell for anything. The Project monitor reads other processes only in the way Task Manager does: `tasklist` for the list, and a read-only `PROCESS_QUERY_LIMITED_INFORMATION` handle (CPU time, start time) for processes whose names are on a short Unreal-only list. It does not read their memory, inject into them, or signal them, and it runs only while the monitor is open. What it still launches, all in response to a click or a poll: `git`, `tasklist`/`taskkill` (only for Unreal Editor and UAT), `explorer`, `cmd /c mklink /J` (the space-in-path fix) and Unreal's own `RunUAT.bat`.
+
+Alongside that, the build now embeds a **version resource** (ProductName, FileDescription, CompanyName, OriginalFilename) and an **icon**, so the binary is no longer an anonymous blob in Explorer and to reputation scoring, and an **application manifest** declaring `asInvoker` — without one, Windows applies installer-detection heuristics and may treat the app as wanting elevation. Debug info is stripped but the symbol table is kept, since a fully stripped unsigned binary reads as deliberately obfuscated. Releases now publish a `.sha256` sidecar, and the in-app updater verifies the download against it before installing.
+
+**What is still missing: a code signing certificate.** None of the above establishes *who* published the binary — only an Authenticode signature does that, and it is the only real fix for SmartScreen's "unrecognised app" warning. The release workflow has a signing step ready to go; it stays skipped until the secrets exist. To enable it, buy a code signing certificate (an OV certificate runs roughly $100–300/year; an EV certificate costs more but gets SmartScreen reputation immediately rather than accruing it over time), then base64-encode the `.pfx` into a `WINDOWS_CERT_BASE64` repository secret with its password in `WINDOWS_CERT_PASSWORD`.
+
+**Verifying a download.** Every release lists its SHA-256 and ships a `.sha256` file:
+
+```powershell
+Get-FileHash unreal_devtool.exe -Algorithm SHA256
+```
+
+If it matches the release, the binary is exactly what CI built. If an engine still flags it, report it as a false positive to the vendor — Microsoft's form is at <https://www.microsoft.com/en-us/wdsi/filesubmission>.
 
 ---
 

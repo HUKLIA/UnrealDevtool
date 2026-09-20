@@ -294,7 +294,7 @@ pub fn task_git_commit_push(
     let (ok, out) = run_git(&dir, &["push", "-u", "origin", &branch]);
     if !ok {
         *result.lock().unwrap() = Some(GitTaskStatus::Error);
-        return format!("[ERROR] git push failed:\n{}\n⚠ Force push is never allowed.", out);
+        return format!("[ERROR] git push failed:\n{}\nForce push is never allowed.", out);
     }
 
     prog!(0.80);
@@ -341,7 +341,7 @@ pub fn task_git_sync(
         if is_conflict(&out) {
             *result.lock().unwrap() = Some(GitTaskStatus::Conflict);
             return format!(
-                "⚠ Rebase conflict!\n{}\n\nOpen Fork to resolve, then run:\n  git rebase --continue",
+                "Rebase conflict!\n{}\n\nOpen Fork to resolve, then run:\n  git rebase --continue",
                 out.trim()
             );
         }
@@ -397,20 +397,20 @@ pub fn task_git_merge_to_main(
     if !ok {
         if is_conflict(&out) {
             *result.lock().unwrap() = Some(GitTaskStatus::Conflict);
-            return format!("⚠ Conflict pulling main!\n{}\n\nOpen Fork to resolve.", out.trim());
+            return format!("Conflict pulling main!\n{}\n\nOpen Fork to resolve.", out.trim());
         }
         *result.lock().unwrap() = Some(GitTaskStatus::Error);
         return format!("[ERROR] pull main: {}", out);
     }
 
     check!(); prog!(0.55);
-    upd!(format!("[3/4] Merging {} → main…", from_branch));
+    upd!(format!("[3/4] Merging {} -> main…", from_branch));
     let (ok, out) = run_git(&dir, &["merge", &from_branch]);
     if !ok {
         if is_conflict(&out) {
             *result.lock().unwrap() = Some(GitTaskStatus::Conflict);
             return format!(
-                "⚠ Merge conflict: {} → main\n{}\n\nOpen Fork to resolve the conflicts.",
+                "Merge conflict: {} -> main\n{}\n\nOpen Fork to resolve the conflicts.",
                 from_branch, out.trim()
             );
         }
@@ -423,12 +423,12 @@ pub fn task_git_merge_to_main(
     let (ok, out) = run_git(&dir, &["push", "origin", "main"]);
     if !ok {
         *result.lock().unwrap() = Some(GitTaskStatus::Error);
-        return format!("[ERROR] push main: {}\n⚠ Force push is never allowed.", out);
+        return format!("[ERROR] push main: {}\nForce push is never allowed.", out);
     }
 
     prog!(1.0);
     *result.lock().unwrap() = Some(GitTaskStatus::Ok);
-    format!("[DONE] Merged {} → main and pushed.", from_branch)
+    format!("[DONE] Merged {} -> main and pushed.", from_branch)
 }
 
 pub fn task_git_checkout(

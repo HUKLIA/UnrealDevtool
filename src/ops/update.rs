@@ -3,12 +3,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// `owner/repo` on GitHub that publishes release builds (see `.github/workflows/release.yml`).
 const REPO: &str = "HUKLIA/UnrealDevtool";
 
 /// Name of the release artifact uploaded by the release workflow.
 const ASSET_NAME: &str = "unreal_devtool.exe";
+
+/// Sidecar published alongside it holding the artifact's SHA-256. See
+/// `.github/workflows/release.yml`.
+const CHECKSUM_ASSET_NAME: &str = "unreal_devtool.exe.sha256";
 
 #[derive(Deserialize)]
 struct ReleaseAsset {
@@ -29,13 +34,25 @@ pub struct UpdateInfo {
     pub version:      String,
     pub published_at: String,
     pub download_url: String,
+    /// URL of the `.sha256` sidecar, when the release published one. Releases
+    /// built before checksums were added have none, which is why this is an
+    /// `Option` rather than a hard requirement.
+    pub checksum_url: Option<String>,
 }
 
-/// Releases are tagged `v0.0.<run_number>` and `CARGO_PKG_VERSION` is bumped to
-/// `0.0.<run_number>` at build time, so the trailing component is a monotonically
-/// increasing build counter we can compare directly.
-fn build_number(version: &str) -> Option<u64> {
-    version.trim_start_matches('v').rsplit('.').next()?.parse().ok()
+/// Parses `v1.0.1`, `1.0.1` or `v1.0` into (major, minor, patch).
+///
+/// Versions are compared as a whole. Releases used to be tagged
+/// `v0.0.<run_number>` and compared by their last component alone, which only
+/// worked while the first two were always zero — `v1.0.1` would have looked
+/// *older* than `v0.0.65` and nobody would ever have been offered it.
+/// Old-style tags still parse, and still order correctly against new ones.
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.trim().trim_start_matches('v').split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().map_or(Some(0), |p| p.parse().ok())?;
+    let patch = parts.next().map_or(Some(0), |p| p.parse().ok())?;
+    Some((major, minor, patch))
 }
 
 /// Show only the date portion of an ISO-8601 timestamp like `2026-06-13T10:23:45Z`.
@@ -54,8 +71,8 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
         .map_err(|e| e.to_string())?;
     let info: ReleaseInfo = resp.into_json().map_err(|e| e.to_string())?;
 
-    let latest  = build_number(&info.tag_name).ok_or("unrecognised release tag")?;
-    let current = build_number(current_version).ok_or("unrecognised current version")?;
+    let latest  = parse_version(&info.tag_name).ok_or("unrecognised release tag")?;
+    let current = parse_version(current_version).ok_or("unrecognised current version")?;
     if latest <= current {
         return Ok(None);
     }
@@ -63,10 +80,15 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
     let asset = info.assets.iter().find(|a| a.name == ASSET_NAME)
         .ok_or("latest release has no exe asset")?;
 
+    let checksum_url = info.assets.iter()
+        .find(|a| a.name == CHECKSUM_ASSET_NAME)
+        .map(|a| a.browser_download_url.clone());
+
     Ok(Some(UpdateInfo {
         version:      info.tag_name,
         published_at: date_only(&info.published_at).to_string(),
         download_url: asset.browser_download_url.clone(),
+        checksum_url,
     }))
 }
 
@@ -111,8 +133,31 @@ pub fn dir_is_writable(dir: &std::path::Path) -> bool {
 /// in-use file without `FILE_SHARE_DELETE`), so we move the current exe aside,
 /// drop the freshly downloaded one in its place, and spawn it. The caller is
 /// expected to exit the process immediately after this returns `Ok`.
+/// Fetches the `.sha256` sidecar and returns the bare hex digest from it.
+///
+/// The file is in `sha256sum` format ("<hex>  <filename>"), so only the first
+/// whitespace-delimited field is the digest.
+fn fetch_expected_digest(url: &str) -> Result<String, String> {
+    let body = ureq::get(url)
+        .set("User-Agent", "UnrealDevTool-Updater")
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    let digest = body.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("checksum file was not in the expected format".into());
+    }
+    Ok(digest)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub fn download_and_install(
     download_url: &str,
+    checksum_url: Option<&str>,
     status:       &Arc<Mutex<String>>,
     cancel:       &Arc<AtomicBool>,
     progress:     &Arc<Mutex<f32>>,
@@ -134,7 +179,7 @@ pub fn download_and_install(
     let new_path = dir.join("unreal_devtool_update.exe");
     let old_path = dir.join("unreal_devtool_old.exe");
 
-    *status.lock().unwrap() = "Downloading update…".into();
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = "Downloading update…".into();
     let resp = ureq::get(download_url)
         .set("User-Agent", "UnrealDevTool-Updater")
         .call()
@@ -148,6 +193,7 @@ pub fn download_and_install(
     let mut file = std::fs::File::create(&new_path).map_err(|e| e.to_string())?;
     let mut buf = [0u8; 64 * 1024];
     let mut downloaded: u64 = 0;
+    let mut hasher = Sha256::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
             drop(file);
@@ -157,14 +203,42 @@ pub fn download_and_install(
         let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 { break; }
         file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        hasher.update(&buf[..n]);
         downloaded += n as u64;
         if total > 0 {
-            *progress.lock().unwrap() = (downloaded as f32 / total as f32).min(1.0);
+            *progress.lock().unwrap_or_else(|e| e.into_inner()) =
+                (downloaded as f32 / total as f32).min(1.0);
         }
     }
     drop(file);
 
-    *status.lock().unwrap() = "Installing update…".into();
+    // Verify before this file is allowed anywhere near the running exe.
+    //
+    // This is a self-replacing updater — it downloads an executable over the
+    // network and then makes it the program the user runs. Checking the
+    // publisher's digest first is the minimum bar for that: a truncated
+    // download, a corrupted CDN object or a tampered artifact is caught here
+    // rather than being installed and launched. It is also what lets the
+    // README tell a wary user (or their IT department) how to independently
+    // confirm that what they are running matches the published release.
+    //
+    // `checksum_url` is `None` for releases published before the workflow
+    // started emitting the sidecar; those still install, since refusing them
+    // would strand anyone on an older build with no way forward.
+    if let Some(url) = checksum_url {
+        *status.lock().unwrap_or_else(|e| e.into_inner()) = "Verifying download…".into();
+        let expected = fetch_expected_digest(url)?;
+        let actual   = hex(&hasher.finalize());
+        if actual != expected {
+            let _ = std::fs::remove_file(&new_path);
+            return Err(format!(
+                "checksum mismatch — update refused and the download was deleted.\n  \
+                 expected {expected}\n  got      {actual}"
+            ));
+        }
+    }
+
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = "Installing update…".into();
     let _ = std::fs::remove_file(&old_path);
     // Every step below touches a file that antivirus may have just grabbed
     // for scanning (the exe we're renaming aside, or the one we just
@@ -208,4 +282,29 @@ pub fn leftover_old_binary_size() -> Option<u64> {
     let dir = current_exe.parent()?;
     let meta = std::fs::metadata(dir.join("unreal_devtool_old.exe")).ok()?;
     Some(meta.len())
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::parse_version;
+
+    #[test]
+    fn versions_parse_in_every_form_a_tag_takes() {
+        assert_eq!(parse_version("v1.0.1"), Some((1, 0, 1)));
+        assert_eq!(parse_version("1.0.1"), Some((1, 0, 1)));
+        assert_eq!(parse_version("v0.0.65"), Some((0, 0, 65)));
+        assert_eq!(parse_version("v2.1"), Some((2, 1, 0)));
+        assert_eq!(parse_version("nightly"), None);
+        assert_eq!(parse_version("v1.x.3"), None);
+    }
+
+    #[test]
+    fn a_new_major_outranks_any_old_build_counter() {
+        let v = |s| parse_version(s).unwrap();
+        assert!(v("v1.0.1") > v("v0.0.65"), "the release that must reach existing users");
+        assert!(v("v1.0.2") > v("v1.0.1"));
+        assert!(v("v1.1.0") > v("v1.0.99"));
+        assert!(v("v0.0.66") > v("v0.0.65"), "old-style tags still order");
+        assert!(!(v("1.0.1") > v("v1.0.1")), "a build is not newer than itself");
+    }
 }

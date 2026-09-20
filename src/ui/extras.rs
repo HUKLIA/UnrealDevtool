@@ -4,81 +4,45 @@ use crate::theme::*;
 use crate::types::ExtrasTab;
 
 impl DevToolApp {
-    /// Extras tab: a left sidebar (sub-nav + Quick Links, matching the
-    /// reference mockup's `FunExtras.tsx`) and a wider content area on the
-    /// right, now that there's room for a real sidebar instead of a
-    /// horizontal tab strip.
+    /// Extras page body with the restored sub-panel selector and a bounded
+    /// body so every secondary feature remains reachable in a short window.
+    ///
+    /// The selector stays in the sheet so every secondary feature remains
+    /// reachable from the same compact surface.
     pub fn show_extras_tab(&mut self, ui: &mut egui::Ui) {
-        // `ui.horizontal` defaults to `Layout::left_to_right(Align::Center)`,
-        // which vertically centers the sidebar and main-content children
-        // relative to *each other* — whichever one is shorter this frame
-        // drifts down instead of both starting flush at the top edge.
-        // `horizontal_top` is the same layout with `Align::Min` instead,
-        // so both columns start at the same top edge regardless of height.
-        ui.horizontal_top(|ui| {
-            let total     = ui.available_width();
-            let gap       = ui.spacing().item_spacing.x;
-            let sidebar_w = (total * 0.24).clamp(170.0, 230.0);
-            let main_w    = total - sidebar_w - gap;
-
-            // `ui.scope` inherits the ambient layout direction, which inside
-            // this `ui.horizontal_top` is left-to-right — that flattened the
-            // sidebar into a single horizontal row instead of stacking it.
-            // `allocate_ui_with_layout` resets the layout explicitly.
-            let top_down = egui::Layout::top_down(egui::Align::Min);
-            ui.allocate_ui_with_layout(egui::vec2(sidebar_w, 0.0), top_down, |ui| {
-                self.show_extras_sidebar(ui);
-            });
-            ui.allocate_ui_with_layout(egui::vec2(main_w, 0.0), top_down, |ui| {
-                match self.extras_tab {
-                    ExtrasTab::Miku      => self.show_miku_extra(ui),
-                    ExtrasTab::Games     => self.show_games_extra(ui),
-                    ExtrasTab::SelfCheck => self.show_app_check_panel(ui),
-                    ExtrasTab::Discord   => self.show_dm_spencer_panel(ui),
-                    ExtrasTab::Customize => self.show_media_config_panel(ui),
-                }
-            });
-        });
-    }
-
-    fn show_extras_sidebar(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("EXTRAS").size(10.5).color(HINT_GRAY));
-            ui.add_space(8.0);
-
-            let tabs: &[(ExtrasTab, &str)] = &[
-                (ExtrasTab::Miku,      "💗  Miku Visualizer"),
-                (ExtrasTab::Games,     "🎮  Mini-Games"),
-                (ExtrasTab::SelfCheck, "⚙  App Self-Check"),
-                (ExtrasTab::Discord,   "💬  DM on Discord"),
-                (ExtrasTab::Customize, "🎨  Customize"),
-            ];
+        let tabs = [
+            (ExtrasTab::Miku, "Miku"),
+            (ExtrasTab::Games, "Games"),
+            (ExtrasTab::SelfCheck, "Self-Check"),
+            (ExtrasTab::Discord, "Discord"),
+            (ExtrasTab::QuickLinks, "Quick Links"),
+            (ExtrasTab::Customize, "Customize"),
+        ];
+        ui.horizontal_wrapped(|ui| {
             for (tab, label) in tabs {
-                let selected = self.extras_tab == *tab;
-                let btn = egui::Button::new(
-                    egui::RichText::new(*label).size(11.0)
-                        .color(if selected { egui::Color32::WHITE } else { egui::Color32::LIGHT_GRAY }),
-                )
-                .fill(if selected { PANEL_BG } else { egui::Color32::TRANSPARENT })
-                .stroke(egui::Stroke::new(1.0, if selected { accent() } else { CARD_BORDER }));
-                if ui.add_sized([ui.available_width(), 30.0], btn).clicked() && !selected {
-                    self.extras_tab = *tab;
-                    if *tab == ExtrasTab::SelfCheck { self.refresh_app_check(); }
+                if ui.add(chip(label, self.extras_tab == tab)).clicked() {
+                    self.extras_tab = tab;
+                    if tab == ExtrasTab::SelfCheck { self.refresh_app_check(); }
                 }
-                ui.add_space(4.0);
             }
         });
-        ui.add_space(10.0);
-
-        card_frame().show(ui, |ui| {
-            self.show_quick_links(ui);
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            match self.extras_tab {
+                ExtrasTab::Miku      => self.show_miku_extra(ui),
+                ExtrasTab::Games     => self.show_games_extra(ui),
+                ExtrasTab::SelfCheck => self.show_app_check_panel(ui),
+                ExtrasTab::Discord   => self.show_dm_spencer_panel(ui),
+                ExtrasTab::QuickLinks => self.show_quick_links(ui),
+                ExtrasTab::Customize => self.show_media_config_panel(ui),
+            }
         });
     }
 
     fn show_miku_extra(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
+        card().show(ui, |ui| {
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("Miku Visualizer").size(13.0).color(accent()));
+                ui.label(heading("Miku Visualizer", 15.0));
                 ui.add_space(10.0);
 
                 let ctx = ui.ctx().clone();
@@ -91,11 +55,9 @@ impl DevToolApp {
                 // get absurd on an ultrawide window) uses that space
                 // instead of just leaving it blank.
                 let gif_size = ui.available_width().clamp(180.0, 420.0);
-                egui::Frame::none()
-                    .fill(GIF_BG)
-                    .stroke(egui::Stroke::new(1.0, accent()))
-                    .rounding(egui::Rounding::same(10.0))
-                    .inner_margin(egui::Margin::same(8.0))
+                well()
+                    .fill(DEEP)
+                    .stroke(egui::Stroke::new(1.0, acc(90)))
                     .show(ui, |ui| {
                         if let Some(gif) = &self.gif_player {
                             gif.show(ui, egui::vec2(gif_size, gif_size));
@@ -105,25 +67,26 @@ impl DevToolApp {
                     });
 
                 ui.add_space(10.0);
-                if ui.add_sized([220.0, 32.0], egui::Button::new("🧊  View 3D Model")).clicked() {
+                if ui.add_sized([220.0, 32.0], primary("View 3D Model")).clicked() {
                     self.active_web_panel = Some(crate::webview::WebPanel::Miku3D);
+                    self.close_sheet();
                 }
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new("Full mouse-look pointer-lock support in 3D mode.")
-                        .size(10.0).color(HINT_GRAY),
+                        .size(10.0).color(MUTED),
                 );
             });
         });
     }
 
     fn show_games_extra(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("Embedded Mini-Games").size(13.0).color(accent()));
+        card().show(ui, |ui| {
+            ui.label(heading("Embedded Mini-Games", 15.0));
             ui.add_space(10.0);
             ui.label(
                 egui::RichText::new("Take a break — quick browser games embedded right in the app.")
-                    .size(10.5).color(HINT_GRAY),
+                    .size(10.5).color(MUTED),
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -131,9 +94,11 @@ impl DevToolApp {
                 let w   = [(ui.available_width() - gap) / 2.0, 60.0];
                 if ui.add_sized(w, egui::Button::new("🍪  Cookie Clicker")).clicked() {
                     self.active_web_panel = Some(crate::webview::WebPanel::CookieClicker);
+                    self.close_sheet();
                 }
                 if ui.add_sized(w, egui::Button::new("🐦  Sponder Bird")).clicked() {
                     self.active_web_panel = Some(crate::webview::WebPanel::SponderBird);
+                    self.close_sheet();
                 }
             });
         });
@@ -161,7 +126,7 @@ impl DevToolApp {
         ui.set_max_width(ui.available_width());
 
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Quick Links").size(11.0).color(HINT_GRAY));
+            ui.label(egui::RichText::new("Quick Links").size(11.0).color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if self.links_edit_mode { "Done" } else { "✏ Edit" };
                 if ui.add_sized([64.0, 22.0], egui::Button::new(label)).clicked() {
@@ -239,7 +204,7 @@ impl DevToolApp {
                     // repeat that mistake since the size isn't a hint.
                     let w = ui.available_width();
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
-                    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, CARD_BORDER));
+                    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, LINE));
                     ui.add_space(6.0);
                 }
             }
@@ -258,7 +223,7 @@ impl DevToolApp {
                 };
                 let btn = egui::Button::new(
                     egui::RichText::new(label).size(11.0)
-                        .color(if has_url { egui::Color32::LIGHT_GRAY } else { HINT_GRAY }),
+                        .color(if has_url { SOFT } else { MUTED }),
                 );
                 if ui.add_sized([ui.available_width(), 26.0], btn).clicked() {
                     if has_url {

@@ -23,33 +23,35 @@ impl DevToolApp {
         let branch_label = format!("Branch: {}", self.git_current_branch);
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🐙  Git").size(13.0).color(accent()));
+            ui.label(heading("Git", 15.0));
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(&branch_label).size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new(&branch_label).size(11.0).color(MUTED));
             ui.add_space(10.0);
 
             let w = [ui.available_width(), 36.0];
-            if ui.add_sized(w, egui::Button::new("📤  Commit & Push  (current branch)")).clicked() {
+            if ui.add_sized(w, primary("Commit & Push  (current branch)")).clicked() {
                 self.git_state = GitState::CommitMsg;
             }
             ui.add_space(5.0);
-            if ui.add_sized(w, egui::Button::new("🔄  Sync  (fetch + rebase on main)")).clicked() {
+            if ui.add_sized(w, ghost("Sync  (fetch + rebase on main)")).clicked() {
                 self.git_state = GitState::SyncConfirm;
             }
             ui.add_space(5.0);
             ui.add_enabled_ui(!on_main, |ui| {
-                if ui.add_sized(w, egui::Button::new("🔀  Merge current branch  >>  main")).clicked() {
+                if ui.add_sized(w, ghost("Merge current branch into main")).clicked() {
                     self.git_state = GitState::MergeConfirm;
                 }
             });
             if on_main {
-                ui.label(egui::RichText::new("  Already on main — switch to a feature branch first")
-                    .size(10.0).color(HINT_GRAY));
+                ui.add_space(4.0);
+                ui.label(hint("Already on main — switch to a feature branch first."));
             }
-            ui.add_space(10.0);
-            if ui.add_sized([ui.available_width(), 26.0], egui::Button::new("—  Cancel")).clicked() {
-                self.git_state = GitState::Idle;
-            }
+            // A "Cancel" button used to sit here. It set `git_state` to `Idle`,
+            // but `show_git_tab` re-opens the menu on the very next frame
+            // whenever the state is `Idle` (otherwise the tab would render
+            // blank) — so the button was a no-op: it could not visibly do
+            // anything no matter how often it was clicked. This menu is the
+            // tab's resting state and has nothing to cancel.
         });
         GitAction::None
     }
@@ -60,10 +62,10 @@ impl DevToolApp {
         let branch     = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("📤  Commit & Push").size(13.0).color(accent()));
-            ui.label(egui::RichText::new(format!(">>  {}", branch)).size(11.0).color(egui::Color32::GRAY));
+            ui.label(heading("Commit & Push", 15.0));
+            ui.label(egui::RichText::new(format!(">>  {}", branch)).size(11.0).color(MUTED));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Commit message:").size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new("Commit message:").size(11.0).color(MUTED));
             let resp = ui.add(
                 egui::TextEdit::multiline(&mut self.git_commit_msg)
                     .hint_text("What did you change?")
@@ -77,15 +79,15 @@ impl DevToolApp {
                 action = GitAction::StartCommitPush;
             }
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Tip: Ctrl+Enter to submit").size(10.0).color(HINT_GRAY));
+            ui.label(egui::RichText::new("Tip: Ctrl+Enter to submit").size(10.0).color(MUTED));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(can_commit, |ui| {
-                    if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Commit & Push")).clicked() {
+                    if ui.add_sized([190.0, 32.0], primary("Commit & Push")).clicked() {
                         action = GitAction::StartCommitPush;
                     }
                 });
-                if ui.add_sized([90.0, 32.0], egui::Button::new("« Back")).clicked() {
+                if ui.add_sized([90.0, 32.0], ghost("Back")).clicked() {
                     self.git_state = GitState::Menu;
                 }
             });
@@ -98,23 +100,23 @@ impl DevToolApp {
         let branch     = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🔄  Sync").size(13.0).color(accent()));
-            ui.label(egui::RichText::new(format!("Branch: {}", branch)).size(11.0).color(egui::Color32::GRAY));
+            ui.label(heading("Sync", 15.0));
+            ui.label(egui::RichText::new(format!("Branch: {}", branch)).size(11.0).color(MUTED));
             ui.add_space(8.0);
             Self::code_block().show(ui, |ui| {
-                ui.label(egui::RichText::new("  1.  git fetch origin main").size(11.0).color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new("  2.  git rebase origin/main").size(11.0).color(egui::Color32::LIGHT_GRAY));
+                ui.label(egui::RichText::new("  1.  git fetch origin main").size(11.0).color(SOFT));
+                ui.label(egui::RichText::new("  2.  git rebase origin/main").size(11.0).color(SOFT));
             });
             ui.add_space(6.0);
             ui.label(egui::RichText::new(
                 "If a conflict occurs you will be asked to open Fork to resolve it."
-            ).size(10.0).color(WARN_AMBER));
+            ).size(10.0).color(AMBER));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Fetch & Rebase")).clicked() {
+                if ui.add_sized([190.0, 32.0], primary("Fetch & Rebase")).clicked() {
                     action = GitAction::StartSync;
                 }
-                if ui.add_sized([90.0, 32.0], egui::Button::new("« Back")).clicked() {
+                if ui.add_sized([90.0, 32.0], ghost("Back")).clicked() {
                     self.git_state = GitState::Menu;
                 }
             });
@@ -127,28 +129,28 @@ impl DevToolApp {
         let from_branch = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🔀  Merge to Main").size(13.0).color(accent()));
-            ui.label(egui::RichText::new(format!("{}  >>  main", from_branch)).size(11.0).color(egui::Color32::GRAY));
+            ui.label(heading("Merge to Main", 15.0));
+            ui.label(egui::RichText::new(format!("{}  >>  main", from_branch)).size(11.0).color(MUTED));
             ui.add_space(8.0);
             Self::code_block().show(ui, |ui| {
-                ui.label(egui::RichText::new("  1.  git checkout main").size(11.0).color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new("  2.  git pull origin main").size(11.0).color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("  3.  git merge {}", from_branch)).size(11.0).color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new("  4.  git push origin main  (no force)").size(11.0).color(egui::Color32::LIGHT_GRAY));
+                ui.label(egui::RichText::new("  1.  git checkout main").size(11.0).color(SOFT));
+                ui.label(egui::RichText::new("  2.  git pull origin main").size(11.0).color(SOFT));
+                ui.label(egui::RichText::new(format!("  3.  git merge {}", from_branch)).size(11.0).color(SOFT));
+                ui.label(egui::RichText::new("  4.  git push origin main  (no force)").size(11.0).color(SOFT));
             });
             ui.add_space(6.0);
             ui.label(egui::RichText::new(
                 "If a conflict occurs you will be asked to open Fork to resolve it."
-            ).size(10.0).color(WARN_AMBER));
+            ).size(10.0).color(AMBER));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add_sized([140.0, 32.0], egui::Button::new(">>  Merge only")).clicked() {
+                if ui.add_sized([140.0, 32.0], primary("Merge only")).clicked() {
                     action = GitAction::StartMerge;
                 }
-                if ui.add_sized([155.0, 32.0], egui::Button::new("📦  Merge + Package")).clicked() {
+                if ui.add_sized([155.0, 32.0], ghost("Merge + Package")).clicked() {
                     action = GitAction::StartMergeAndPackage;
                 }
-                if ui.add_sized([80.0, 32.0], egui::Button::new("« Back")).clicked() {
+                if ui.add_sized([80.0, 32.0], ghost("Back")).clicked() {
                     self.git_state = GitState::Menu;
                 }
             });
@@ -162,19 +164,19 @@ impl DevToolApp {
         Self::git_frame().show(ui, |ui| {
             ui.colored_label(accent(), format!("[OK]  Pushed to  {}", branch));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("What next?").size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new("What next?").size(11.0).color(MUTED));
             ui.add_space(6.0);
             let w = [ui.available_width(), 34.0];
-            if ui.add_sized(w, egui::Button::new(format!("🔖  Stay on  {}", branch))).clicked() {
+            if ui.add_sized(w, ghost(&format!("Stay on {}", branch))).clicked() {
                 self.git_state = GitState::Idle;
             }
             ui.add_space(5.0);
-            if ui.add_sized(w, egui::Button::new(format!("🌿  New branch based on  {}", branch))).clicked() {
+            if ui.add_sized(w, primary(&format!("New branch based on {}", branch))).clicked() {
                 self.git_new_branch_name.clear();
                 self.git_state = GitState::NewBranchAfterPush;
             }
             ui.add_space(8.0);
-            if ui.add_sized([ui.available_width(), 26.0], egui::Button::new("—  Done")).clicked() {
+            if ui.add_sized([ui.available_width(), 26.0], ghost("Done")).clicked() {
                 self.git_state = GitState::Idle;
             }
         });
@@ -188,19 +190,19 @@ impl DevToolApp {
         Self::git_frame().show(ui, |ui| {
             ui.colored_label(accent(), format!("[OK]  Merged {}  >>  main", merged_from));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("What next?").size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new("What next?").size(11.0).color(MUTED));
             ui.add_space(6.0);
             let w = [ui.available_width(), 34.0];
-            if ui.add_sized(w, egui::Button::new(format!("🔙  Back to  {}", merged_from))).clicked() {
+            if ui.add_sized(w, ghost(&format!("Back to {}", merged_from))).clicked() {
                 action = GitAction::StartCheckout { branch: merged_from.clone() };
             }
             ui.add_space(5.0);
-            if ui.add_sized(w, egui::Button::new("🌿  New branch based on main")).clicked() {
+            if ui.add_sized(w, primary("New branch based on main")).clicked() {
                 self.git_new_branch_name.clear();
                 self.git_state = GitState::NewBranchAfterMerge;
             }
             ui.add_space(8.0);
-            if ui.add_sized([ui.available_width(), 26.0], egui::Button::new("—  Stay on main")).clicked() {
+            if ui.add_sized([ui.available_width(), 26.0], ghost("Stay on main")).clicked() {
                 self.git_state = GitState::Idle;
             }
         });
@@ -217,10 +219,10 @@ impl DevToolApp {
         };
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("🌿  New Branch").size(13.0).color(accent()));
-            ui.label(egui::RichText::new(format!("Based on: {}", base_label)).size(11.0).color(egui::Color32::GRAY));
+            ui.label(heading("New Branch", 15.0));
+            ui.label(egui::RichText::new(format!("Based on: {}", base_label)).size(11.0).color(MUTED));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Branch name:").size(11.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new("Branch name:").size(11.0).color(MUTED));
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.git_new_branch_name)
                     .hint_text("feature/my-thing")
@@ -235,11 +237,11 @@ impl DevToolApp {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(can_create, |ui| {
-                    if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Create Branch")).clicked() {
+                    if ui.add_sized([190.0, 32.0], primary("Create Branch")).clicked() {
                         action = GitAction::StartNewBranch { name: self.git_new_branch_name.trim().to_string() };
                     }
                 });
-                if ui.add_sized([90.0, 32.0], egui::Button::new("« Back")).clicked() {
+                if ui.add_sized([90.0, 32.0], ghost("Back")).clicked() {
                     self.git_state = if after_merge { GitState::AfterMerge } else { GitState::AfterPush };
                 }
             });
@@ -264,44 +266,50 @@ impl DevToolApp {
     /// stays far below that.
     pub fn show_git_status_panel(&self, ui: &mut egui::Ui) {
         Self::git_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("📊  Repo Status").size(13.0).color(accent()));
+            ui.label(heading("Repo Status", 15.0));
             ui.add_space(2.0);
             ui.label(
                 egui::RichText::new(format!("Branch: {}", self.git_current_branch))
-                    .size(11.0).color(egui::Color32::GRAY),
+                    .size(11.0).color(MUTED),
             );
             ui.add_space(10.0);
 
             let (label, color) = if self.git_status.uncommitted == 0 {
                 ("[OK]  Working tree clean".to_string(), accent())
             } else {
-                (format!("[!]  {} uncommitted change(s)", self.git_status.uncommitted), WARN_AMBER)
+                (format!("[!]  {} uncommitted change(s)", self.git_status.uncommitted), AMBER)
             };
             ui.colored_label(color, label);
             ui.add_space(8.0);
 
-            ui.label(egui::RichText::new("LAST COMMIT").size(9.5).color(HINT_GRAY));
+            ui.label(egui::RichText::new("LAST COMMIT").size(9.5).color(MUTED));
             ui.add_space(2.0);
             match &self.git_status.last_commit {
-                Some(c) => { ui.label(egui::RichText::new(c).size(11.0).color(egui::Color32::LIGHT_GRAY)); }
-                None    => { ui.label(egui::RichText::new("No commits yet").size(11.0).color(HINT_GRAY)); }
+                Some(c) => {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(c).size(11.0).color(SOFT))
+                            .truncate(),
+                    )
+                    .on_hover_text(c);
+                }
+                None => { ui.label(egui::RichText::new("No commits yet").size(11.0).color(MUTED)); }
             }
             ui.add_space(8.0);
 
-            ui.label(egui::RichText::new("VS. UPSTREAM  (as of last fetch)").size(9.5).color(HINT_GRAY));
+            ui.label(egui::RichText::new("VS. UPSTREAM  (as of last fetch)").size(9.5).color(MUTED));
             ui.add_space(2.0);
             match self.git_status.ahead_behind {
                 Some((0, 0)) => { ui.colored_label(accent(), "Up to date with upstream"); }
                 Some((ahead, behind)) => {
                     ui.label(
-                        egui::RichText::new(format!("↑ {} ahead   ↓ {} behind", ahead, behind))
-                            .size(11.0).color(egui::Color32::LIGHT_GRAY),
+                        egui::RichText::new(format!("{} ahead, {} behind", ahead, behind))
+                            .size(11.0).color(SOFT),
                     );
                 }
                 None => {
                     ui.label(
                         egui::RichText::new("No upstream tracking branch set")
-                            .size(10.5).color(HINT_GRAY),
+                            .size(10.5).color(MUTED),
                     );
                 }
             }
@@ -310,14 +318,14 @@ impl DevToolApp {
             ui.separator();
             ui.add_space(8.0);
 
-            ui.label(egui::RichText::new("COMMIT ACTIVITY  (LAST 14 DAYS)").size(9.5).color(HINT_GRAY));
+            ui.label(egui::RichText::new("COMMIT ACTIVITY  (LAST 14 DAYS)").size(9.5).color(MUTED));
             ui.add_space(4.0);
             if self.git_status.activity.is_empty() {
                 // Empty means the underlying `git log` failed outright (no
                 // repo, no commits at all, git missing) — not "14 real
                 // zeros" — so this shows an explicit "no data" message
                 // instead of a flat, misleading chart.
-                ui.label(egui::RichText::new("No commit history").size(10.5).color(HINT_GRAY));
+                ui.label(egui::RichText::new("No commit history").size(10.5).color(MUTED));
             } else {
                 crate::ui::bar_chart::show_bar_chart(ui, &self.git_status.activity, 70.0);
             }
@@ -326,16 +334,16 @@ impl DevToolApp {
             ui.separator();
             ui.add_space(8.0);
 
-            ui.label(egui::RichText::new("WORKING TREE").size(9.5).color(HINT_GRAY));
+            ui.label(egui::RichText::new("WORKING TREE").size(9.5).color(MUTED));
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(format!("{} file(s) changed", self.git_status.changed_files))
-                    .size(11.0).color(egui::Color32::LIGHT_GRAY),
+                    .size(11.0).color(SOFT),
             );
             ui.horizontal(|ui| {
                 ui.colored_label(accent(), format!("+{}", self.git_status.insertions));
                 ui.add_space(8.0);
-                ui.colored_label(ERR_RED, format!("-{}", self.git_status.deletions));
+                ui.colored_label(RED, format!("-{}", self.git_status.deletions));
             });
         });
     }
@@ -343,11 +351,8 @@ impl DevToolApp {
     // ── Shared frame builders ─────────────────────────────────────────────────
 
     fn git_frame() -> egui::Frame {
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(14.0))
+        card()
+            .stroke(egui::Stroke::new(1.0, acc(110)))
     }
 
     fn code_block() -> egui::Frame {

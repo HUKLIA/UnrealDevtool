@@ -1,9 +1,16 @@
+pub mod clean;
+pub mod clock;
 pub mod diagnostics;
+pub mod doctor;
 pub mod discord;
 pub mod git;
+pub mod history;
 pub mod llm;
+pub mod monitor;
 pub mod package;
 pub mod preflight;
+pub mod rclone;
+pub mod run;
 pub mod selfcheck;
 pub mod update;
 pub mod vs;

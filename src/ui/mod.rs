@@ -1,26 +1,29 @@
 mod bar_chart;
+pub mod browser;
 mod chat;
-mod circular_meter;
 mod dashboard;
 mod extras;
 mod git;
+pub mod guide;
 mod intro;
+mod monitor;
 mod package;
+mod palette;
+mod panels;
 mod preflight;
+pub mod rail;
+pub mod run;
 mod selfcheck;
+pub mod setup;
+pub mod shell;
 mod vs;
 
 use eframe::egui;
 use crate::app::DevToolApp;
-use crate::config::{clear_project_path, save_project_path, save_ui_config, UiConfig};
 use crate::theme::*;
-use crate::types::{AppTab, GitAction, GitState, GitTaskStatus, UploadAction};
-use std::sync::atomic::Ordering;
-
-// ── eframe::App — the main update loop ───────────────────────────────────────
+use crate::types::{GitAction, GitState, GitTaskStatus, RunState, UploadAction};
 
 /// How often to re-check GitHub for a new release while the app is open.
-/// 5 minutes: notices a new build quickly without burning the 60 req/hr limit.
 const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 impl eframe::App for DevToolApp {
@@ -28,27 +31,267 @@ impl eframe::App for DevToolApp {
         self.center_window_on_startup(ctx);
 
         if self.show_intro {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                self.show_intro_screen(ui, ctx);
-            });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(BG))
+                .show(ctx, |ui| self.show_intro_screen(ui, ctx));
             return;
         }
 
-        // `unwrap_or_else(|e| e.into_inner())` recovers from a poisoned lock
-        // instead of panicking. Without this, a panic on any background
-        // thread (packaging, git, upload, update-check) would poison one of
-        // these shared mutexes, and this being the main render loop — called
-        // directly by winit, not wrapped in catch_unwind — the very next
-        // frame would panic too and take the whole app down with it.
-        let is_busy = *self.is_working.lock().unwrap_or_else(|e| e.into_inner());
-        self.status_display = self.status_message.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.pump_background_state(ctx);
 
-        // Pick up results from the background git-status / editor-running
-        // checks kicked off by `open_git_menu`/`refresh_git_status_async`
-        // and `open_package_config` — see those and `git_refresh_pending`'s
-        // doc comment for why these run off the UI thread instead of
-        // shelling out to `git`/`tasklist` synchronously on every tab
-        // switch.
+        self.handle_window_input(ctx);
+        self.sync_monitor(ctx);
+
+        let state = self.run_state();
+        self.pending_webview = None;
+        if self.guide_active {
+            // Targets belong to this frame's layout.  Clearing them here
+            // prevents an old button rectangle being highlighted after a
+            // state change or a resize.
+            self.guide_target = None;
+        }
+
+        egui::TopBottomPanel::top("topbar")
+            .exact_height(shell::topbar_height(ctx.screen_rect().width()))
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| self.show_topbar(ui));
+
+        // Keep task results and non-UAT errors visible after a background
+        // operation finishes. The main run log is deliberately UAT output;
+        // this compact bar carries git, VS, upload, and setup status.
+        egui::TopBottomPanel::bottom("status_output")
+            .exact_height(28.0)
+            // Side padding matches the surface gutter; the status dot used to
+            // sit on the window edge with half of it clipped.
+            .frame(egui::Frame::none().fill(BG_TOP)
+                .inner_margin(egui::Margin::symmetric(GUTTER, 0.0)))
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    dot(ui, if self.status_display.contains("[ERROR") { RED } else { accent() }, 6.0);
+                    ui.add(egui::Label::new(egui::RichText::new(&self.status_display).font(mono(11.0)).color(SOFT)).truncate())
+                        .on_hover_text(&self.status_display);
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none()
+                .fill(BG)
+                // No bottom margin: scrolling regions carry their own trailing
+                // gap, so content runs off the bottom edge rather than being
+                // cut off above an empty strip.
+                .inner_margin(egui::Margin { left: GUTTER, right: GUTTER, top: GUTTER, bottom: 0.0 }))
+            .show(ctx, |ui| {
+                paint_ambient(ui);
+
+                // The surface cross-fades and rises when the job changes
+                // state, so Ready → Running → Done reads as one thing moving
+                // rather than three screens swapping.
+                let key = match state {
+                    RunState::Setup => 0, RunState::Ready => 1,
+                    RunState::Running => 2, RunState::Done => 3,
+                };
+                let t = ease_out(ctx.animate_bool_with_time(
+                    egui::Id::new("surface").with(key), true,
+                    anim_secs(T_BASE, self.frame_dt)));
+
+                let layer = ui.layer_id();
+                ui.scope(|ui| {
+                    ui.multiply_opacity(t);
+                    self.show_update_notice(ui);
+                    self.show_surface(ui, state);
+                });
+
+                if t < 1.0 {
+                    ctx.transform_layer_shapes(
+                        layer,
+                        egui::emath::TSTransform::from_translation(egui::vec2(0.0, (1.0 - t) * 10.0)),
+                    );
+                    ctx.request_repaint();
+                }
+            });
+
+        // Hide any webview requested by the underlying surface before sheets
+        // paint. The Browser sheet will request its own rectangle below.
+        if self.sheet.is_some() {
+            self.pending_webview = None;
+        }
+        // Sheets paint over everything, in their own foreground area.
+        egui::Area::new(egui::Id::new("sheets"))
+            .fixed_pos(egui::Pos2::ZERO)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                self.show_sheet_layer(ui, ctx);
+            });
+
+        // While a file is being dragged over the window, say what dropping does.
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let screen = ctx.screen_rect();
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip, egui::Id::new("drop_hint")));
+            painter.rect_filled(screen, 0.0, tint(BG, 210));
+            let card = egui::Rect::from_center_size(screen.center(), egui::vec2(360.0, 110.0)
+                .min(screen.size() - egui::vec2(32.0, 32.0)));
+            painter.rect(card, egui::Rounding::same(R_SECTION), CARD,
+                egui::Stroke::new(1.5, accent()));
+            painter.text(card.center() - egui::vec2(0.0, 10.0), egui::Align2::CENTER_CENTER,
+                "Drop to open project", display(18.0), TEXT);
+            painter.text(card.center() + egui::vec2(0.0, 16.0), egui::Align2::CENTER_CENTER,
+                "a .uproject file, or the folder that contains one", body(12.0), MUTED);
+        }
+
+        self.show_palette(ctx);
+
+        // The manual paints last, above the sheets, because it describes them.
+        if self.guide_active {
+            // A tour step that opens the Browser would otherwise be narrating
+            // a native child window drawn on top of its own callout.
+            self.pending_webview = None;
+            egui::Area::new(egui::Id::new("guide"))
+                .fixed_pos(egui::Pos2::ZERO)
+                .order(egui::Order::Tooltip)
+                .show(ctx, |ui| {
+                    ui.set_min_size(ctx.screen_rect().size());
+                    self.show_guide_overlay(ui, ctx);
+                });
+        }
+
+        // Sync the embedded WebView2 control to whatever asked for space.
+        let ppp = ctx.pixels_per_point();
+        if let Some(err) = self.webview_manager.update(self.pending_webview, ppp) {
+            self.set_status(err);
+        }
+    }
+}
+
+impl DevToolApp {
+    /// Window-level input: dropping a project onto the window, and the one
+    /// keyboard shortcut for the thing this app is for.
+    fn handle_window_input(&mut self, ctx: &egui::Context) {
+        // Drop a .uproject (or a folder containing one) to open it.
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
+            i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect()
+        });
+        if !self.is_busy_now() {
+            for path in dropped {
+                let project = if path.is_dir() {
+                    std::fs::read_dir(&path).ok().and_then(|rd| rd.flatten()
+                        .map(|e| e.path())
+                        .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("uproject"))))
+                } else if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("uproject")) {
+                    Some(path)
+                } else {
+                    None
+                };
+                if let Some(p) = project {
+                    self.apply_project_path(p);
+                    self.set_status("Project opened from drag-and-drop.".into());
+                    break;
+                }
+            }
+        }
+
+        // Ctrl+Enter starts the build, but only from the Ready surface with
+        // nothing open over it, so it can never fire from inside a text box
+        // on a sheet or during a git prompt.
+        let ctrl_enter = ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
+        if ctrl_enter
+            && !self.guide_active
+            && self.sheet.is_none()
+            && self.active_web_panel.is_none()
+            && !self.show_git_sheet
+            && matches!(self.run_state(), RunState::Ready)
+            && !self.is_busy_now()
+        {
+            self.start_packaging();
+        }
+        // A build scheduled for a time of day. It only fires from the Ready
+        // surface with nothing open: starting a build closes the Unreal Editor,
+        // and that must never happen while someone is part-way through
+        // something else. If it cannot start, it says so rather than waiting
+        // silently for a moment that has passed.
+        if let Some((at, label)) = self.schedule.clone() {
+            let now = std::time::Instant::now();
+            if now >= at {
+                self.schedule = None;
+                if matches!(self.run_state(), RunState::Ready) && !self.is_busy_now() && !self.show_git_sheet {
+                    self.set_status(format!("Scheduled build ({label}) starting…"));
+                    self.start_packaging();
+                } else {
+                    self.set_status(format!(
+                        "[WARNING] Scheduled build for {label} was skipped: the app was not on the Ready screen."));
+                }
+            } else {
+                ctx.request_repaint_after((at - now).min(std::time::Duration::from_secs(1)));
+            }
+        }
+
+        // Ctrl+K opens the command palette from anywhere.
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) && !self.guide_active {
+            self.toggle_palette();
+        }
+        // F1 opens the manual from anywhere.
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) && !self.guide_active {
+            self.open_guide();
+        }
+    }
+
+    fn is_busy_now(&self) -> bool {
+        *self.is_working.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Routes to whatever owns the surface this frame.
+    ///
+    /// The transient flows are checked first and take the whole surface: each
+    /// is one focused decision (where did the build go, upload it or not,
+    /// which IDE) and none of them make sense shown beside something else.
+    fn show_surface(&mut self, ui: &mut egui::Ui, state: RunState) {
+        if let Some(panel) = self.active_web_panel {
+            self.show_web_panel_ui(ui, panel);
+        } else if self.show_open_folder_panel {
+            self.show_open_folder_panel(ui);
+        } else if self.show_upload_fallback_panel {
+            self.show_upload_fallback_panel(ui);
+        } else if self.show_upload_panel {
+            match self.show_upload_panel_ui(ui) {
+                UploadAction::Upload => self.start_upload(),
+                UploadAction::Skip   => self.show_upload_panel = false,
+                UploadAction::None   => {}
+            }
+        } else if self.show_vs_config {
+            if self.show_vs_config_panel(ui) { self.start_vs_rebuild(); }
+        } else if self.show_git_sheet {
+            self.show_git_flow(ui);
+        } else {
+            match state {
+                RunState::Setup => self.show_setup_surface(ui),
+                _               => self.show_run_surface(ui, state),
+            }
+        }
+    }
+
+    /// Everything that has to happen once per frame before the UI is drawn:
+    /// draining background results, advancing the state machines, and the
+    /// periodic polls that keep what is on screen live.
+    fn pump_background_state(&mut self, ctx: &egui::Context) {
+        self.sample_frame_time(ctx);
+
+        // `unwrap_or_else(|e| e.into_inner())` recovers from a poisoned lock
+        // rather than panicking: this is the render loop, called directly by
+        // winit and not wrapped in catch_unwind, so a panic on any background
+        // thread would otherwise take the whole app down on the next frame.
+        let is_busy = *self.is_working.lock().unwrap_or_else(|e| e.into_inner());
+        // Copy only when it actually changed. This ran a `String` clone every
+        // frame — 144 allocations a second on this display for a value that
+        // changes a few times a minute.
+        {
+            let latest = self.status_message.lock().unwrap_or_else(|e| e.into_inner());
+            if *latest != self.status_display {
+                self.status_display.clear();
+                self.status_display.push_str(&latest);
+            }
+        }
+
         if let Some((branch, status)) = self.git_refresh_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
             self.git_current_branch = branch;
             self.git_status         = status;
@@ -56,16 +299,26 @@ impl eframe::App for DevToolApp {
         if let Some(running) = self.editor_check_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
             self.editor_is_running = running;
         }
-        // Picked up from `refresh_package_observed` (background `read_dir`
-        // over the build folder) — see `version_check_pending`'s field
-        // doc comment for why this can't just be set synchronously.
         if let Some(next) = self.version_check_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
             self.next_version_preview = next;
         }
+        if let Some(found) = self.builds_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.builds = found;
+        }
+        if let Some((items, log, diags)) = self.pc_check_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.pc_check_items      = items;
+            self.build_log_path      = log;
+            self.build_log_diagnosis = diags;
+        }
+        if let Some(found) = self.clean_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            // Keep any ticks the user already made; only seed defaults when the
+            // list is first populated or its shape changed.
+            if self.clean_selected.len() != found.len() {
+                self.clean_selected = found.iter().map(|t| t.default_on && t.exists).collect();
+            }
+            self.clean_targets = found;
+        }
 
-        // Periodic update check. Once an update is found we stop polling.
-        // `request_repaint_after` lets egui sleep until the next check is due
-        // rather than painting every frame just to watch the clock.
         if self.update_info.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
             let elapsed = self.last_update_check.elapsed();
             if elapsed >= UPDATE_CHECK_INTERVAL {
@@ -75,600 +328,253 @@ impl eframe::App for DevToolApp {
             }
         }
 
-        // Detect background-task completion and advance git state machine
         let just_finished = self.was_working && !is_busy;
         self.was_working = is_busy;
         if just_finished {
-            if let Some(a) = &mut self.audio_player {
-                // Stop before resetting speed, not after: `set_speed` restarts
-                // playback (rodio `Player::append`) whenever audio is still
-                // marked playing, and appending right after a stop while the
-                // old sound is still draining makes rodio block the caller
-                // until the audio thread catches up (`sleep_until_end`).
-                // That block runs on this UI thread — normally sub-millisecond,
-                // but if the audio thread is stalled (e.g. the OS deprioritizes
-                // it while the window is locked/minimized) it can hang the
-                // whole app until the audio thread resumes. Stopping first
-                // marks us as not-playing, so `set_speed` skips the restart.
-                a.stop();
-                a.set_speed(1.0);
+            self.on_task_finished();
+            // A 30-minute build finishes while you are somewhere else. Flash
+            // the taskbar button (the OS's standard "needs attention" cue)
+            // unless the window is already in front.
+            if !ctx.input(|i| i.viewport().focused.unwrap_or(true)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                    egui::UserAttentionType::Informational));
             }
-            self.fast_package_mode = false;
-
-            // The periodic per-tab poll below is gated on `!is_busy`, so
-            // `last_tab_poll` sits frozen for the whole duration of
-            // whatever just finished (packaging can run ~12+ minutes) —
-            // left alone, the *next* frame would see an `elapsed` of "12
-            // minutes and change", which is `>=` any of the poll
-            // intervals, and immediately fire a second, redundant poll of
-            // whichever tab is active on top of the unconditional refresh
-            // just below. Resetting here makes the periodic poll start its
-            // countdown fresh from "busy period just ended" instead.
-            // (Tab-switching is only possible from the idle view, so
-            // whichever tab was active when the busy period started is
-            // still the active one now — this reset is never wasted on a
-            // tab the user has since left.)
-            self.last_tab_poll = std::time::Instant::now();
-
-            // Any background task finishing can change what the Package tab
-            // should be showing — most obviously a packaging run itself
-            // (the version that was just built must not be offered again,
-            // see `refresh_package_observed`'s doc comment for the rename
-            // failure that caused), but also e.g. a VS-files rebuild or git
-            // op that closed/reopened the editor along the way. Called
-            // unconditionally here rather than gated on "was this task a
-            // package run specifically" — it's just two cheap background
-            // thread spawns (a `read_dir` and a `tasklist` call), and doing
-            // it unconditionally is simpler and can't miss a case. No-ops
-            // harmlessly if there's no project set.
-            self.refresh_package_observed();
-
-            let git_status = self.git_result.lock().unwrap_or_else(|e| e.into_inner()).take();
-            if let Some(gs) = git_status {
-                match gs {
-                    GitTaskStatus::Ok => {
-                        self.git_state = self.git_next_state.clone();
-                        // After merge: auto-open package config if requested
-                        if self.git_package_after_merge && self.git_state == GitState::AfterMerge {
-                            self.git_package_after_merge = false;
-                            self.git_state = GitState::Idle;
-                            self.open_package_config();
-                        }
-                    }
-                    GitTaskStatus::Conflict | GitTaskStatus::Error => {
-                        self.git_state = GitState::Idle;
-                        self.git_package_after_merge = false;
-                    }
-                }
-                self.git_next_state = GitState::Idle;
-                // The op just changed the repo (new commit, new upstream
-                // ref, etc.) — refresh so the companion status panel
-                // doesn't show stale uncommitted/ahead-behind counts.
-                // Backgrounded like every other git-status refresh (see
-                // `refresh_git_status_async`'s doc comment) rather than
-                // calling `git` synchronously right as the busy view is
-                // about to hand back to idle.
-                if let Some(dir) = self.git_project_dir() {
-                    self.refresh_git_status_async(dir);
-                }
-            }
-
-            // A Google Drive upload just failed — offer a manual fallback
-            // instead of leaving the user with only an error string.
-            let gdrive_failed = {
-                let mut f = self.gdrive_upload_failed.lock().unwrap_or_else(|e| e.into_inner());
-                std::mem::take(&mut *f)
-            };
-            if gdrive_failed {
-                self.show_upload_fallback_panel = true;
-            }
-
-            // If packaging produced a zip, ask about the output folder first
-            if let Some(zip) = self.pending_zip.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                self.upload_zip_path   = zip.clone();
-                self.upload_use_local  = false;
-                self.upload_use_gdrive = false;
-                // Force the "gdrive remote configured?" check (in
-                // `show_upload_panel_ui`) to re-run for this new build,
-                // instead of trusting whatever it found the *last* time the
-                // upload panel was shown this session. Without this, a user
-                // who sets up the "gdrive" remote for the first time (via
-                // the panel's own "Set up Google Drive remote…" button)
-                // between two packaging runs would still see the stale
-                // "No gdrive remote found" warning on the second build,
-                // even though it would now actually work — the panel
-                // already has a manual ↻ for re-checking mid-session, but
-                // there's no reason a fresh build shouldn't just start
-                // fresh too. `gdrive_remote_exists()` only reads rclone's
-                // local config file (no network), so re-checking here is
-                // cheap.
-                self.gdrive_remote_status = None;
-                if let Some(folder) = zip.parent() {
-                    self.pending_open_folder_path = folder.to_path_buf();
-                    self.show_open_folder_panel   = true;
-                } else {
-                    self.show_upload_panel = true;
-                }
-            }
-
         }
 
         if let Some(a) = &mut self.audio_player { a.tick(); }
 
-        // Chat: once the background stream finishes, fold the accumulated
-        // reply into history — mirrors the was_working/just_finished pattern
-        // above, since the streaming buffer only lives in a shared Mutex the
-        // background thread can reach, not directly in chat_history.
-        let chat_busy_now = *self.chat_busy.lock().unwrap_or_else(|e| e.into_inner());
-        if self.was_chat_busy && !chat_busy_now {
+        let chat_busy = *self.chat_busy.lock().unwrap_or_else(|e| e.into_inner());
+        if self.was_chat_busy && !chat_busy {
             let reply = std::mem::take(&mut *self.chat_streaming.lock().unwrap_or_else(|e| e.into_inner()));
             if !reply.is_empty() {
                 self.chat_history.push(crate::ops::llm::ChatMessage { role: "assistant".into(), content: reply });
             }
         }
-        self.was_chat_busy = chat_busy_now;
+        self.was_chat_busy = chat_busy;
 
-        // ── Periodic "keep the active tab's observed state live" tick ──────
+        // ── Keep the surface live ──────────────────────────────────────────
         //
-        // Makes the tabs dynamic. Without this, most of what a tab displays
-        // (git status, the package version preview, disk space, etc.) is
-        // only ever recomputed when that tab is first switched to (see
-        // `switch_tab`), so it visibly drifts out of date the longer the
-        // user sits on one tab without leaving it — see
-        // `refresh_package_observed`'s doc comment for the concrete bug
-        // that caused on the Package tab. This re-runs just the cheap,
-        // *observed* half of whichever tab is currently on screen (never
-        // the user-owned fields — see the "OBSERVED vs. USER-OWNED" split
-        // documented on the relevant refresh methods), on a short interval.
-        //
-        // Deliberate tradeoff: the app now wakes itself up on this interval
-        // instead of sleeping fully idle when nothing else is happening
-        // (egui is normally purely event-driven, painting only in response
-        // to input or an explicit `request_repaint`). A few background
-        // thread spawns every few seconds is a fair price for the tabs
-        // actually being live instead of frozen at whatever they showed on
-        // last entry.
-        //
-        // Gating:
-        //  - `!is_busy` — a packaging run has the UAT pipeline doing heavy
-        //    disk I/O; spawning extra git/tasklist/PowerShell processes
-        //    into that is exactly the kind of contention this app has
-        //    already been burned by (see `run_background_task`,
-        //    `refresh_git_status_async`'s doc comment). `show_intro` needs
-        //    no explicit check here — the early `return` at the top of this
-        //    function already skips everything below while it's showing.
-        //  - The global overlay panels (embedded web panel, the post-package
-        //    "open folder?" prompt, the upload panel, the upload-failure
-        //    fallback panel) aren't tab content — polling "the active tab"
-        //    while one of these covers the screen would refresh state the
-        //    user can't even see right now, for no benefit.
-        let overlay_open = self.active_web_panel.is_some()
-            || self.show_open_folder_panel
-            || self.show_upload_panel
-            || self.show_upload_fallback_panel;
-        if !is_busy && !overlay_open {
-            // Chat and Extras are intentionally absent (`None`): Chat's
-            // provider/model list already refreshes on tab entry and has
-            // its own manual ↻ button, and Extras' sub-panels are either
-            // static (Miku, Customize, Discord) or refresh on entry
-            // (App Self-Check) — none of them have a "the world changed
-            // out from under a value we cached" failure mode the way
-            // git status / package version / disk space do. See the task
-            // report for the full per-tab audit.
-            let interval = match self.active_tab {
-                AppTab::Package   => Some(std::time::Duration::from_secs(2)),
-                AppTab::Git       => Some(std::time::Duration::from_secs(5)),
-                AppTab::Dashboard => Some(std::time::Duration::from_secs(3)),
-                AppTab::Chat | AppTab::Extras => None,
-            };
-            if let Some(interval) = interval {
-                let elapsed = self.last_tab_poll.elapsed();
-                if elapsed >= interval {
-                    self.last_tab_poll = std::time::Instant::now();
-                    match self.active_tab {
-                        AppTab::Package => {
-                            // Version preview every tick — it's a single
-                            // `read_dir` and it's the whole reason this tab
-                            // needed to become live in the first place.
-                            self.refresh_package_observed_version_only();
-                            // The editor check spawns `tasklist` (twice, in
-                            // the common no-editor-open case), so it gets a
-                            // much longer floor of its own — see
-                            // `refresh_editor_check_async`'s doc comment.
-                            if self.last_editor_poll.elapsed() >= std::time::Duration::from_secs(10) {
-                                self.refresh_editor_check_async();
-                            }
-                        }
-                        AppTab::Git => {
-                            if let Some(dir) = self.git_project_dir() {
-                                self.refresh_git_status_async(dir);
-                            }
-                        }
-                        AppTab::Dashboard => {
-                            // Cheap part every tick: pure in-process
-                            // path/string checks plus an on-disk build-log
-                            // rescan, both already documented elsewhere as
-                            // safe to run on the UI thread (see
-                            // `ops::preflight::run_checks` and
-                            // `scan_last_build_log`).
-                            self.refresh_pc_check_cheap();
-                            // The disk-space check shells out to PowerShell
-                            // on *every* call (see `disk_space_check_item`'s
-                            // doc comment) — polling that on the same 3s
-                            // cadence would spawn a fresh PowerShell process
-                            // every 3 seconds the user sits on Dashboard,
-                            // which is wasteful and pointless (free disk
-                            // space essentially never changes meaningfully
-                            // that fast). Chose a much longer, independent
-                            // 20s floor for just this part instead of either
-                            // dropping its periodic refresh entirely or
-                            // paying the PowerShell-spawn cost every tick.
-                            if self.last_disk_poll.elapsed() >= std::time::Duration::from_secs(20) {
-                                self.refresh_pc_check_disk_async();
-                            }
-                        }
-                        AppTab::Chat | AppTab::Extras => {}
-                    }
-                    ctx.request_repaint_after(interval);
-                } else {
-                    ctx.request_repaint_after(interval - elapsed);
+        // The old version polled "whichever tab is active". There is one
+        // surface now, and it shows git state, the version preview, the editor
+        // check and the build list all at once, so each gets its own interval.
+        // Skipped while busy: a packaging run already saturates the disk, and
+        // spawning git/tasklist/PowerShell into that is exactly the contention
+        // this app has been burned by before.
+        if !is_busy && self.sheet.is_none() {
+            if self.last_tab_poll.elapsed() >= std::time::Duration::from_secs(3) {
+                self.last_tab_poll = std::time::Instant::now();
+                self.refresh_package_observed_version_only();
+                self.refresh_doctor();
+                self.refresh_pc_check_cheap();
+                if let Some(dir) = self.git_project_dir() {
+                    self.refresh_git_status_async(dir);
                 }
             }
-        }
-
-        self.pending_webview = None;
-
-        // Status/Output is pinned to the bottom — always visible regardless
-        // of how tall the button list above grows. Panels must be added
-        // before CentralPanel so it reserves its space first.
-        egui::TopBottomPanel::bottom("status_panel").show(ctx, |ui| {
-            ui.add_space(4.0);
-            self.show_status_area(ui);
-            ui.add_space(4.0);
-        });
-
-        // Everything else scrolls, so no content is ever unreachable just
-        // because the window is shorter than the current button list —
-        // the window is still freely resizable too, this is on top of that.
-        egui::CentralPanel::default().show(ctx, |ui| {
-            paint_background_decoration(ui);
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.heading(egui::RichText::new("Unreal Master Toolbox").color(egui::Color32::WHITE));
-                ui.separator();
-                ui.add_space(6.0);
-
-                if is_busy {
-                    self.show_busy_view(ui, ctx);
-                } else {
-                    self.show_idle_view(ui);
-                }
-                ui.add_space(8.0);
-            });
-        });
-
-        // Sync the embedded WebView2 panel (3D Miku / Cookie Clicker / Sponder
-        // Bird) to whatever panel (if any) requested space this frame.
-        let ppp = ctx.pixels_per_point();
-        if let Some(err) = self.webview_manager.update(self.pending_webview, ppp) {
-            self.set_status(err);
-        }
-    }
-}
-
-/// Faint background grid + a soft accent-colored glow spot in the corner —
-/// matches the reference mockup's `tech-grid` + blurred spotlight decoration.
-/// Painted first, so opaque card fills on top of it cover the grid/glow
-/// wherever content actually sits; it only shows through in the gaps,
-/// exactly like the mockup's `absolute inset-0` background layer.
-fn paint_background_decoration(ui: &egui::Ui) {
-    let rect    = ui.max_rect();
-    let painter = ui.painter();
-    let a       = accent();
-
-    const SPACING: f32 = 42.0;
-    let grid_color = egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 5);
-    let mut x = rect.left();
-    while x < rect.right() {
-        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, grid_color));
-        x += SPACING;
-    }
-    let mut y = rect.top();
-    while y < rect.bottom() {
-        painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, grid_color));
-        y += SPACING;
-    }
-
-    // Soft glow spot, top-left — several stacked translucent circles stand
-    // in for a true gaussian blur, which egui has no built-in support for.
-    let glow_center = rect.left_top() + egui::vec2(140.0, 90.0);
-    for i in 0..7 {
-        let radius = 40.0 + i as f32 * 34.0;
-        let alpha  = 10 - i;
-        painter.circle_filled(glow_center, radius, egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha));
-    }
-}
-
-// ── Shared UI methods ─────────────────────────────────────────────────────────
-
-impl DevToolApp {
-    pub fn show_busy_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if let Some(p) = &self.project_path {
-            let name = p.file_name().unwrap_or_default().to_string_lossy();
-            ui.horizontal(|ui| {
-                ui.colored_label(accent(), "*");
-                ui.label(egui::RichText::new(name.as_ref()).color(egui::Color32::LIGHT_GRAY));
-            });
-            ui.add_space(6.0);
-        }
-        let dt = ctx.input(|i| i.stable_dt);
-        if !self.miku_mode_3d {
-            let gif_dt = if self.fast_package_mode { dt * 5.0 } else { dt };
-            if let Some(gif) = &mut self.gif_player { gif.advance(ctx, gif_dt); }
-        }
-
-        // ── 2D / 3D toggle ────────────────────────────────────────────────────
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Miku:").size(11.0).color(HINT_GRAY));
-
-            let active   = egui::Color32::from_rgb(0, 180, 160);
-            let inactive = egui::Color32::from_rgb(40, 40, 55);
-
-            let btn2d = egui::Button::new(egui::RichText::new("2D").size(11.0))
-                .fill(if !self.miku_mode_3d { active } else { inactive });
-            if ui.add_sized([36.0, 20.0], btn2d).clicked() && self.miku_mode_3d {
-                self.miku_mode_3d = false;
-                if let Some(g) = &mut self.gif_player { g.reset(); }
+            if self.last_editor_poll.elapsed() >= std::time::Duration::from_secs(10) {
+                self.refresh_editor_check_async();
             }
-
-            let btn3d = egui::Button::new(egui::RichText::new("3D").size(11.0))
-                .fill(if self.miku_mode_3d { active } else { inactive });
-            if ui.add_sized([36.0, 20.0], btn3d).clicked() && !self.miku_mode_3d {
-                self.miku_mode_3d = true;
+            if self.last_disk_poll.elapsed() >= std::time::Duration::from_secs(20) {
+                self.refresh_pc_check_disk_async();
             }
-        });
-        ui.add_space(4.0);
+            // Build folders only change when a build finishes, so this is a
+            // slow safety net rather than the primary refresh.
+            if self.last_builds_poll.elapsed() >= std::time::Duration::from_secs(30) {
+                self.last_builds_poll = std::time::Instant::now();
+                self.refresh_builds();
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(3));
+        }
+    }
 
-        let gif_size = egui::vec2(300.0, 252.0);
-        egui::Frame::none()
-            .fill(GIF_BG)
-            .stroke(egui::Stroke::new(1.5, accent()))
-            .rounding(egui::Rounding::same(10.0))
-            .inner_margin(egui::Margin::same(12.0))
-            .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    if self.miku_mode_3d {
-                        let (rect, _) = ui.allocate_exact_size(gif_size, egui::Sense::hover());
-                        self.pending_webview = Some((crate::webview::WebPanel::Miku3D, rect));
-                    } else if let Some(gif) = &self.gif_player {
-                        gif.show(ui, gif_size);
-                    } else {
-                        ui.add_space(gif_size.y);
-                        ui.colored_label(accent(), "[ working… ]");
-                    }
+    /// Runs once, on the frame a background task completes.
+    fn on_task_finished(&mut self) {
+        if let Some(a) = &mut self.audio_player {
+            // Stop before resetting speed: `set_speed` restarts playback while
+            // audio is still marked playing, and appending right after a stop
+            // can block this thread until the audio thread drains.
+            a.stop();
+            a.set_speed(1.0);
+        }
+        self.last_tab_poll = std::time::Instant::now();
+        self.refresh_package_observed();
+        self.refresh_builds();
+
+        // Freeze the run's numbers into a result the Done surface can show.
+        // Taken as a snapshot rather than read live, so the timings stop when
+        // the build does instead of continuing to tick on screen.
+        let (stages, warnings, errors, any_stage, error_samples) = {
+            let mut r = self.run.lock().unwrap_or_else(|e| e.into_inner());
+            r.finish();
+            let any = r.started.iter().any(|s| s.is_some());
+            (r.elapsed, r.warnings, r.errors, any, r.error_samples.clone())
+        };
+        let produced = self.pending_zip.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if produced.is_some() || any_stage {
+            let bytes = produced.as_ref()
+                .and_then(|z| std::fs::metadata(z).ok())
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let status = self.status_display.clone();
+            let ok = !status.contains("[ERROR") && !status.contains("[CANCELLED");
+            // The folder this run wrote to: beside the zip when there is one,
+            // otherwise wherever the newest log is (a failed run has no zip).
+            let log = produced.as_ref()
+                .and_then(|z| z.parent())
+                .map(|d| d.join("BuildLog.txt"))
+                .filter(|l| l.is_file())
+                .or_else(|| self.project_path.as_ref()
+                    .and_then(|p| crate::ops::diagnostics::latest_build_log(p)));
+            let version_dir = log.as_ref().and_then(|l| l.parent()).map(|d| d.to_path_buf());
+            let version = version_dir.as_ref()
+                .and_then(|d| d.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| crate::ops::package::format_version(self.next_version_preview));
+            let duration = self.task_started_at.map(|t| t.elapsed()).unwrap_or_default();
+
+            // Remember how this build was made and how long each stage took;
+            // the next run's progress bars are paced from it.
+            if let Some(dir) = &version_dir {
+                crate::ops::history::write_info(dir, &crate::ops::history::BuildInfo {
+                    platform: self.build_target.label().to_string(),
+                    config:   self.build_configuration.as_str().to_string(),
+                    ok,
+                    secs:     duration.as_secs(),
+                    warnings,
+                    errors,
+                    stage_secs: stages.map(|d| d.map(|d| d.as_secs()).unwrap_or(0)),
                 });
+            }
+            // The log scan for the failure summary runs off-thread.
+            self.refresh_pc_check_cheap();
+            self.last_build = Some(crate::types::BuildOutcome {
+                version,
+                zip: produced.clone(),
+                bytes,
+                duration,
+                stages,
+                warnings,
+                errors,
+                ok,
+                platform: self.build_target,
+                config:   self.build_configuration,
+                log,
+                error_samples,
             });
-
-        let audio_playing = self.audio_player.as_ref().is_some_and(|a| a.is_playing());
-        if audio_playing {
-            ui.add_space(8.0);
-            ui.vertical_centered(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space((ui.available_width() - 280.0).max(0.0) / 2.0);
-
-                    let mute_icon = if self.audio_muted { "🔇" } else { "🔊" };
-                    if ui.add_sized([28.0, 22.0], egui::Button::new(mute_icon)).clicked() {
-                        let muted = !self.audio_muted;
-                        self.set_audio_muted(muted);
-                    }
-
-                    let mut volume = self.audio_volume;
-                    let resp = ui.add_enabled(
-                        !self.audio_muted,
-                        egui::Slider::new(&mut volume, 0..=100).text("volume"),
-                    );
-                    if resp.changed() {
-                        self.set_audio_volume(volume);
-                    }
-                });
-            });
-        }
-
-        ui.add_space(12.0);
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(&self.busy_label).size(15.0).color(accent()));
-            ui.add_space(6.0);
-
-            let real_prog = *self.progress.lock().unwrap_or_else(|e| e.into_inner());
-
-            if self.fast_package_mode {
-                let done = real_prog >= 1.0;
-                let elapsed = self.task_started_at
-                    .map(|t| t.elapsed().as_secs_f32())
-                    .unwrap_or(0.0);
-
-                // Each step fills in 2.5s sequentially; overall rushes to ~0.95.
-                let step = |start: f32| -> f32 {
-                    if done { return 1.0; }
-                    ((elapsed - start) / 2.5).clamp(0.0, 1.0)
-                };
-                let overall = if done { 1.0 } else {
-                    (1.0 - (-elapsed * 0.6_f32).exp()) * 0.95
-                };
-
-                let bar_w = ui.available_width().min(340.0);
-                let steps: &[(&str, f32, egui::Color32)] = &[
-                    ("Compile ",  step(0.0),  accent()),
-                    ("Cook    ",  step(2.5),  MIKU_PINK),
-                    ("Stage   ",  step(5.0),  egui::Color32::from_rgb(180, 160, 60)),
-                    ("Pack    ",  step(7.5),  egui::Color32::from_rgb(80, 160, 220)),
-                ];
-                for (label, prog, color) in steps {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(*label).size(10.0).color(HINT_GRAY).monospace());
-                        ui.add(
-                            egui::ProgressBar::new(*prog)
-                                .desired_width(bar_w - 60.0)
-                                .fill(*color),
-                        );
-                    });
-                    ui.add_space(2.0);
+            // The post-build prompts still run, but they now open over a
+            // surface that already shows the result rather than instead of it.
+            if let Some(zip) = produced
+                && let Some(folder) = zip.parent() {
+                    self.upload_zip_path = zip.clone();
+                    self.upload_use_local = false;
+                    self.upload_use_gdrive = false;
+                    self.gdrive_remote_status = None;
+                    self.pending_open_folder_path = folder.to_path_buf();
                 }
-                ui.add_space(6.0);
-                ui.add(
-                    egui::ProgressBar::new(overall)
-                        .desired_width(bar_w)
-                        .fill(accent())
-                        .show_percentage(),
-                );
-
-                if !done {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
-                }
-            } else {
-                ui.add(
-                    egui::ProgressBar::new(real_prog)
-                        .desired_width(ui.available_width().min(340.0))
-                        .fill(accent())
-                        .show_percentage(),
-                );
-            }
-
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("see Status / Output below for progress")
-                .size(11.0).color(HINT_GRAY));
-            ui.add_space(8.0);
-            if ui.add_sized([110.0, 26.0], egui::Button::new("Cancel")).clicked() {
-                self.cancel_flag.store(true, Ordering::Relaxed);
-                self.set_status("[CANCELLING] Stopping — please wait…".into());
-            }
-        });
-        ui.add_space(8.0);
-    }
-
-    pub fn show_idle_view(&mut self, ui: &mut egui::Ui) {
-        if let Some(download_url) = self.show_update_banner_ui(ui) {
-            self.start_update_install(download_url);
         }
 
-        // Global overlays: transient post-action flows that take priority
-        // over normal tab content no matter which tab is active.
-        if let Some(panel) = self.active_web_panel {
-            self.show_web_panel_ui(ui, panel);
-            return;
-        }
-        if self.show_open_folder_panel {
-            self.show_open_folder_panel(ui);
-            return;
-        }
-        if self.show_upload_fallback_panel {
-            self.show_upload_fallback_panel(ui);
-            return;
-        }
-        if self.show_upload_panel {
-            let action = self.show_upload_panel_ui(ui);
-            match action {
-                UploadAction::Upload => self.start_upload(),
-                UploadAction::Skip   => { self.show_upload_panel = false; }
-                UploadAction::None   => {}
-            }
-            return;
-        }
-
-        self.show_tab_bar(ui);
-        ui.add_space(12.0);
-
-        // Fade the newly-selected tab's content in. `animate_bool` keys its
-        // state by `Id`, and this id is unique per tab — so every time
-        // `active_tab` changes, it's a *fresh* id starting at 0.0 and
-        // animating up to 1.0, giving a fade-in with no extra state to track.
-        let fade_id = egui::Id::new("active_tab_fade").with(self.active_tab);
-        let alpha   = ui.ctx().animate_bool(fade_id, true);
-        ui.scope(|ui| {
-            ui.multiply_opacity(alpha);
-            match self.active_tab {
-                AppTab::Dashboard => self.show_dashboard_tab(ui),
-                AppTab::Package   => self.show_package_tab(ui),
-                AppTab::Git       => self.show_git_tab(ui),
-                AppTab::Chat      => self.show_chat_panel_ui(ui),
-                AppTab::Extras    => self.show_extras_tab(ui),
-            }
-        });
-        if alpha < 1.0 { ui.ctx().request_repaint(); }
-    }
-
-    /// Top tab bar: Dashboard / Package / Git / Chat / Extras.
-    pub fn show_tab_bar(&mut self, ui: &mut egui::Ui) {
-        let tabs: &[(AppTab, &str)] = &[
-            (AppTab::Dashboard, "🖥 Dashboard"),
-            (AppTab::Package,   "📦 Package"),
-            (AppTab::Git,       "🐙 Git"),
-            (AppTab::Chat,      "💬 Chat"),
-            (AppTab::Extras,    "✨ Extras"),
-        ];
-        card_frame().inner_margin(egui::Margin::symmetric(4.0, 4.0)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let gap    = ui.spacing().item_spacing.x;
-                let tab_w  = (ui.available_width() - gap * (tabs.len() as f32 - 1.0)) / tabs.len() as f32;
-                for (tab, label) in tabs {
-                    let selected = self.active_tab == *tab;
-                    let btn = egui::Button::new(
-                        egui::RichText::new(*label).size(10.5)
-                            .color(if selected { egui::Color32::WHITE } else { HINT_GRAY }),
-                    )
-                    .fill(if selected { PANEL_BG } else { egui::Color32::TRANSPARENT })
-                    .stroke(if selected { egui::Stroke::new(1.0, accent()) } else { egui::Stroke::NONE });
-                    if ui.add_sized([tab_w, 28.0], btn).clicked() && !selected {
-                        self.switch_tab(*tab);
+        let git_status = self.git_result.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(gs) = git_status {
+            match gs {
+                GitTaskStatus::Ok => {
+                    self.git_state = self.git_next_state.clone();
+                    if self.git_package_after_merge && self.git_state == GitState::AfterMerge {
+                        self.git_package_after_merge = false;
+                        self.git_state = GitState::Idle;
+                        self.show_git_sheet = false;
+                        self.start_packaging();
                     }
                 }
-            });
-        });
+                GitTaskStatus::Conflict | GitTaskStatus::Error => {
+                    self.git_state = GitState::Idle;
+                    self.git_package_after_merge = false;
+                }
+            }
+            self.git_next_state = GitState::Idle;
+            if let Some(dir) = self.git_project_dir() {
+                self.refresh_git_status_async(dir);
+            }
+        }
+
+        let gdrive_failed = {
+            let mut f = self.gdrive_upload_failed.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *f)
+        };
+        if gdrive_failed {
+            self.show_upload_fallback_panel = true;
+        }
     }
 
-    /// Package tab: the config form is always shown (no separate "open"
-    /// click needed now that it's tab content, not a togglable overlay).
-    fn show_package_tab(&mut self, ui: &mut egui::Ui) {
-        if self.project_path.is_none() {
-            ui.colored_label(WARN_AMBER, "(!)  Set a project path on the Dashboard tab first.");
-            return;
-        }
-        match self.show_package_config_panel(ui) {
-            Some(false) => self.start_packaging(),
-            Some(true)  => self.start_fast_packaging(),
-            None        => {}
-        }
-    }
-
-    /// Git tab: the menu is always shown once a project is set (`switch_tab`
-    /// initializes `git_state` to `Menu` the first time this tab is opened).
-    fn show_git_tab(&mut self, ui: &mut egui::Ui) {
-        if self.git_project_dir().is_none() {
-            ui.colored_label(WARN_AMBER, "(!)  Set a project path on the Dashboard tab first.");
-            return;
-        }
-        // Several git flows (e.g. Sync with main) land back on `Idle` when
-        // they finish, which `show_git_panel` renders as nothing — that was
-        // fine when Idle meant "fall through to the button list", but this
-        // is now always-visible tab content, so re-open the menu instead of
-        // showing a blank tab.
+    /// The full git flow, shown in place of the run surface while the user is
+    /// part-way through one. It is a sequence of focused steps, so it takes
+    /// the surface rather than living in the rail.
+    fn show_git_flow(&mut self, ui: &mut egui::Ui) {
         if matches!(self.git_state, GitState::Idle) {
-            self.open_git_menu();
+            self.show_git_sheet = false;
+            return;
         }
-        // The git flow is a sequential state machine (one focused step at a
-        // time), not a bento grid — stretching its action buttons across
-        // the *entire* wide tab would leave one button spanning ~1000px.
-        // But capping it to a fixed width and leaving everything past that
-        // blank read as a broken single-column layout next to Dashboard
-        // and Package's two-column grids. Matching their `columns(2)`
-        // pattern here — action panel on the left, a real repo-status
-        // companion panel (not a placeholder) on the right — gives the tab
-        // the same balanced structure instead of a lopsided void.
-        let mut action = crate::types::GitAction::None;
-        ui.columns(2, |cols| {
-            action = self.show_git_panel(&mut cols[0]);
-            self.show_git_status_panel(&mut cols[1]);
+        ui.horizontal(|ui| {
+            ui.label(eyebrow("SOURCE CONTROL"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_sized([72.0, 26.0], quiet("Close")).clicked() {
+                    self.show_git_sheet = false;
+                    self.git_state = GitState::Idle;
+                }
+            });
         });
+        ui.add_space(10.0);
+
+        // The flow and the repo detail travel together — the numbers you want
+        // while deciding whether to push are the ones on this screen — and
+        // they use the whole surface.
+        //
+        // This was one column capped at 660pt and left-aligned, which on a
+        // wide window left more than a third of the screen empty beside it.
+        // Wide, the two panels sit side by side and each scrolls on its own;
+        // narrow, they stack under a single scroll region.
+        const GIT_SPLIT_MIN: f32 = 760.0;
+        const COL_GAP: f32 = 18.0;
+        let region = ui.available_rect_before_wrap();
+        let action = if region.width() >= GIT_SPLIT_MIN {
+            let col_w = ((region.width() - COL_GAP) / 2.0).floor();
+            let left  = egui::Rect::from_min_size(region.min, egui::vec2(col_w, region.height()));
+            let right = egui::Rect::from_min_size(
+                egui::pos2(region.max.x - col_w, region.min.y), egui::vec2(col_w, region.height()));
+            ui.allocate_rect(region, egui::Sense::hover());
+            let td = egui::Layout::top_down(egui::Align::Min);
+
+            let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left).layout(td));
+            let action = egui::ScrollArea::vertical()
+                .id_salt("git_flow_actions")
+                .auto_shrink([false, false])
+                .show(&mut left_ui, |ui| {
+                    let a = self.show_git_panel(ui);
+                    ui.add_space(GUTTER);
+                    a
+                })
+                .inner;
+
+            let mut right_ui = ui.new_child(egui::UiBuilder::new().max_rect(right).layout(td));
+            egui::ScrollArea::vertical()
+                .id_salt("git_flow_status")
+                .auto_shrink([false, false])
+                .show(&mut right_ui, |ui| {
+                    self.show_git_status_panel(ui);
+                    ui.add_space(GUTTER);
+                });
+            action
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("git_flow")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let a = self.show_git_panel(ui);
+                    ui.add_space(14.0);
+                    self.show_git_status_panel(ui);
+                    ui.add_space(GUTTER);
+                    a
+                })
+                .inner
+        };
         match action {
             GitAction::StartCommitPush          => self.git_start_commit_push(),
             GitAction::StartSync                => self.git_start_sync(),
@@ -679,457 +585,136 @@ impl DevToolApp {
             GitAction::None                     => {}
         }
     }
+}
 
-    /// If a newer release was found by the background update check, show a
-    /// dismissible banner. Returns `Some(download_url)` if the user clicked
-    /// "Update Now".
-    pub fn show_update_banner_ui(&mut self, ui: &mut egui::Ui) -> Option<String> {
-        if !self.show_update_banner { return None; }
-        let info = self.update_info.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+impl DevToolApp {
+    /// Update availability, as one strip above the surface.
+    ///
+    /// This used to be a full-width banner with its own heading, date line and
+    /// two buttons — a permanent block of the page for something that is
+    /// usually irrelevant and never urgent. One line says the same thing.
+    fn show_update_notice(&mut self, ui: &mut egui::Ui) {
+        if !self.show_update_banner { return; }
+        // Documentation screenshots (debug builds only) should not show the
+        // update banner a development version always triggers.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("UDT_DEMO").is_some() { return; }
+        let Some(info) = self.update_info.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
 
-        let mut clicked_update = false;
-        egui::Frame::none()
-            .fill(egui::Color32::from_rgb(35, 55, 50))
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(6.0))
-            .inner_margin(egui::Margin::same(8.0))
+        let mut install = false;
+        callout(accent())
+            .inner_margin(egui::Margin::symmetric(15.0, 9.0))
             .show(ui, |ui| {
-                // Plain `ui.horizontal` centers its children on the cross
-                // axis (`Align::Center`) — next to the two-line `ui.vertical`
-                // block on the left, that pulled the single-row button group
-                // on the right down to the block's vertical midpoint instead
-                // of lining up with its first line. `horizontal_top` keeps
-                // the same left-to-right flow but aligns everything to the
-                // top edge instead.
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.colored_label(accent(), format!("Update available: {}", info.version));
-                        ui.label(egui::RichText::new(format!("Released {}", info.published_at))
-                            .size(11.0).color(HINT_GRAY));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized([60.0, 24.0], egui::Button::new("Dismiss")).clicked() {
-                            self.show_update_banner = false;
-                        }
-                        if ui.add_sized([100.0, 24.0], egui::Button::new("Update Now")).clicked() {
-                            clicked_update = true;
-                        }
-                    });
-                });
-            });
-        ui.add_space(8.0);
-
-        if clicked_update { Some(info.download_url) } else { None }
-    }
-
-    pub fn show_media_config_panel(&mut self, ui: &mut egui::Ui) {
-        // Was its own bespoke `Frame::none()` (PANEL_DARK fill, accent
-        // stroke) — every Extras sub-panel used to build a slightly
-        // different frame (Miku used `card_frame()`, Discord had a custom
-        // fill color, this one an accent-colored stroke), which read as
-        // visually inconsistent flipping between them. `card_frame()` is
-        // the one shared frame the rest of the app already uses.
-        card_frame().show(ui, |ui| {
-                ui.label(egui::RichText::new("🎨  Customize Miku & Sound").size(13.0).color(accent()));
-                ui.add_space(10.0);
-
-                ui.label(egui::RichText::new("2D Image / GIF").size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-                let ctx = ui.ctx().clone();
-                // Plain `ui.horizontal` (`Align::Center`) vertically centers
-                // the 96px thumbnail frame against the multi-line details
-                // column next to it — the shorter of the two drifted toward
-                // the middle instead of both starting at the same top edge.
-                // `horizontal_top` (`Align::Min`) fixes that.
-                ui.horizontal_top(|ui| {
-                    let thumb_max = 96.0;
-                    egui::Frame::none()
-                        .fill(GIF_BG)
-                        .stroke(egui::Stroke::new(1.0, accent()))
-                        .rounding(egui::Rounding::same(6.0))
-                        .inner_margin(egui::Margin::same(4.0))
-                        .show(ui, |ui| {
-                            if let Some(gif) = &mut self.gif_player {
-                                gif.ensure_texture(&ctx);
-                                let size  = gif.size();
-                                let scale = (thumb_max / size.x.max(size.y).max(1.0)).min(1.0);
-                                gif.show(ui, size * scale);
-                            } else {
-                                ui.allocate_exact_size(egui::vec2(thumb_max, thumb_max), egui::Sense::hover());
-                            }
-                        });
-
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        let gif_label = self.custom_gif_path.as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "(default Miku GIF)".to_string());
-                        ui.label(egui::RichText::new(gif_label).size(10.0).color(HINT_GRAY).monospace());
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            if ui.add_sized([100.0, 24.0], egui::Button::new("Browse…")).clicked() {
-                                self.choose_custom_gif();
-                            }
-                            ui.add_enabled_ui(self.custom_gif_path.is_some(), |ui| {
-                                if ui.add_sized([80.0, 24.0], egui::Button::new("Reset")).clicked() {
-                                    self.reset_gif_to_default();
-                                }
-                            });
-                        });
-                    });
-                });
-
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(8.0);
-
-                ui.label(egui::RichText::new("Looping Sound  (mp3 / wav)").size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-                let (sound_name, sound_path_hint) = match &self.custom_sound_path {
-                    Some(p) => (
-                        p.file_name().map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| p.to_string_lossy().to_string()),
-                        Some(p.to_string_lossy().to_string()),
-                    ),
-                    None => ("Ievan Polkka  (default)".to_string(), None),
-                };
+                ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.colored_label(accent(), "🔊");
-                    ui.label(egui::RichText::new(sound_name).size(13.0).color(egui::Color32::WHITE).strong());
-                });
-                if let Some(hint) = sound_path_hint {
-                    ui.label(egui::RichText::new(hint).size(10.0).color(HINT_GRAY).monospace());
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.add_sized([100.0, 24.0], egui::Button::new("Browse…")).clicked() {
-                        self.choose_custom_sound();
-                    }
-                    ui.add_enabled_ui(self.custom_sound_path.is_some(), |ui| {
-                        if ui.add_sized([80.0, 24.0], egui::Button::new("Reset")).clicked() {
-                            self.reset_sound_to_default();
-                        }
-                    });
-                });
-
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(8.0);
-
-                ui.label(egui::RichText::new("Accent Color").size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(4.0);
-
-                const PRESETS: &[(&str, egui::Color32)] = &[
-                    ("Miku Teal",    egui::Color32::from_rgb(0, 173, 181)),
-                    ("Sakura Pink",  egui::Color32::from_rgb(236, 72, 153)),
-                    ("Hyper Purple", egui::Color32::from_rgb(168, 85, 247)),
-                    ("Cyber Orange", egui::Color32::from_rgb(249, 115, 22)),
-                    ("Tachyon Yellow", egui::Color32::from_rgb(234, 179, 8)),
-                ];
-                ui.horizontal(|ui| {
-                    for (name, color) in PRESETS {
-                        let selected = accent() == *color;
-                        let btn = egui::Button::new(if selected { "✓" } else { "" })
-                            .fill(*color)
-                            .min_size(egui::vec2(26.0, 22.0));
-                        if ui.add(btn).on_hover_text(*name).clicked() {
-                            crate::theme::set_accent(ui.ctx(), *color);
-                            save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())) });
-                        }
-                    }
-                });
-                ui.add_space(6.0);
-
-                ui.horizontal(|ui| {
-                    let mut color = accent();
-                    if ui.color_edit_button_srgba(&mut color).changed() {
-                        crate::theme::set_accent(ui.ctx(), color);
-                        save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())) });
-                    }
-                    ui.add_space(8.0);
-                    if ui.add_sized([160.0, 24.0], egui::Button::new("Reset to default teal")).clicked() {
-                        crate::theme::set_accent(ui.ctx(), crate::theme::default_accent());
-                        save_ui_config(&UiConfig { accent_rgb: None });
-                    }
-                });
-                // No trailing "< Back" here — the Extras left sidebar is
-                // the navigation for these sub-panels; a Back button that
-                // just jumps to Miku was a dead-end control duplicating
-                // what the sidebar already does one click away.
-            });
-    }
-
-    /// Renders an embedded web page (Cookie Clicker, Sponder Bird, 3D Miku)
-    /// with a "< Back" button. The actual WebView2 control is positioned by
-    /// `WebViewManager::update` after this frame's layout is known.
-    pub fn show_web_panel_ui(&mut self, ui: &mut egui::Ui, panel: crate::webview::WebPanel) {
-        ui.horizontal(|ui| {
-            if ui.add_sized([90.0, 26.0], egui::Button::new("< Back")).clicked() {
-                self.active_web_panel = None;
-            }
-            ui.add_space(8.0);
-            ui.colored_label(accent(), panel.title());
-        });
-        ui.add_space(6.0);
-
-        let avail = ui.available_size();
-        let (rect, _) = ui.allocate_exact_size(avail, egui::Sense::hover());
-        self.pending_webview = Some((panel, rect));
-    }
-
-    pub fn show_dm_spencer_panel(&mut self, ui: &mut egui::Ui) {
-        // The heading used to sit outside this Frame (centered, floating in
-        // open background) while every other Extras sub-panel — Miku,
-        // Self-Check, Customize — puts its heading as the first line
-        // *inside* its card. That made this panel visually inconsistent
-        // with the rest, like its title wasn't attached to the panel it
-        // labels.
-        //
-        // The frame itself was also its own bespoke `Frame::none()` with a
-        // one-off `Color32::from_rgb(30, 30, 40)` fill found nowhere else —
-        // every Extras sub-panel now shares the same `card_frame()` instead
-        // of each hand-rolling fill/stroke/rounding/margins.
-        card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("💬  DM on Discord").size(13.0).color(accent()));
-            ui.add_space(10.0);
-
-            ui.label(egui::RichText::new("Discord username to search:")
-                .size(11.0).color(egui::Color32::GRAY));
-            ui.add_space(4.0);
-            ui.add(egui::TextEdit::singleline(&mut self.dm_target_name)
-                .desired_width(f32::INFINITY)
-                .hint_text("e.g. gonkindroid"));
-            ui.add_space(10.0);
-
-            let can_open = !self.dm_target_name.trim().is_empty();
-            let btn_w = ui.available_width();
-            ui.add_enabled_ui(can_open, |ui| {
-                if ui.add_sized([btn_w, 34.0],
-                    egui::Button::new("🔍  Open Discord & Search")).clicked()
-                {
-                    crate::ops::discord::open_discord_dm(&self.dm_target_name, None, None);
-                }
-            });
-
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            ui.label(egui::RichText::new("Quick messages (click to send):")
-                .size(11.0).color(egui::Color32::GRAY));
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(can_open, |ui| {
-                    for preset in self.dm_message_presets.clone() {
-                        if ui.button(&preset).clicked() {
-                            crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&preset), None);
-                        }
-                    }
-                });
-            });
-            ui.add_space(10.0);
-
-            ui.label(egui::RichText::new("Custom message:")
-                .size(11.0).color(egui::Color32::GRAY));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                // `TextEdit::desired_width` is a minimum hint, not a
-                // cap — it measured itself wider than the reserved
-                // margin and butted right up against the Send button
-                // with no visible gap. `add_sized` allocates the exact
-                // rect and fits the widget into it instead.
-                let btn_w = 70.0;
-                let text_w = (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(60.0);
-                ui.add_sized(
-                    [text_w, 22.0],
-                    egui::TextEdit::singleline(&mut self.dm_custom_message).hint_text("Type a message…"),
-                );
-                let can_send = can_open && !self.dm_custom_message.trim().is_empty();
-                ui.add_enabled_ui(can_send, |ui| {
-                    if ui.add_sized([btn_w, 22.0], egui::Button::new("Send")).clicked() {
-                        crate::ops::discord::open_discord_dm(&self.dm_target_name, Some(&self.dm_custom_message.clone()), None);
-                        self.dm_custom_message.clear();
-                    }
-                });
-            });
-
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Image to send: ")
-            .size(11.0).color(egui::Color32::GRAY));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let gap = ui.spacing().item_spacing.x;
-                let browse_w = 80.0;
-                let send_w = 70.0;
-                let text_w = (ui.available_width() - browse_w - send_w - gap * 2.0).max(60.0);
-                ui.add_sized(
-                    [text_w, 22.0],
-                    egui::TextEdit::singleline(&mut self.dm_image_path).hint_text("C:\\path\\to\\image.png"),
-                );
-                if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse...")).clicked()
-                    && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "png", "webp"]).pick_file() {
-                        self.dm_image_path = path.to_string_lossy().to_string();
-                    }
-                let can_imag = can_open && !self.dm_image_path.trim().is_empty();
-                ui.add_enabled_ui(can_imag, |ui| {
-                    if ui.add_sized([send_w, 22.0], egui::Button::new("Send")).clicked() {
-                        crate::ops::discord::open_discord_dm(
-                            &self.dm_target_name,
-                            None,
-                            Some(&self.dm_image_path.clone()),
-                        );
-                    }
-                })
-            });
-
-            // Used to float outside the card, on the raw background below
-            // it, along with a "< Back" button and a duplicate "Play
-            // Sponder Bird" button — moved inside so the hint reads as part
-            // of this panel instead of an unattached caption. Back is gone
-            // entirely (the sidebar is the nav); Sponder Bird already has a
-            // button of its own in the Mini-Games panel, so the one here
-            // was just a duplicate.
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(
-                "Opens Discord on this PC, presses Ctrl+K and types the username automatically.")
-                .size(10.0).color(HINT_GRAY));
-        });
-    }
-
-    pub fn show_project_path_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Unreal Project  (.uproject)")
-            .size(12.0).color(egui::Color32::GRAY));
-        ui.add_space(4.0);
-
-        ui.horizontal(|ui| {
-            let has_path  = self.project_path.is_some();
-            let browse_w  = 78.0;
-            let clear_w   = 80.0;
-            let gap       = ui.spacing().item_spacing.x;
-            // Reserve exactly what the trailing buttons actually consume —
-            // one gap + Browse, plus another gap + Clear only when Clear is
-            // even shown — instead of a separate hardcoded constant that
-            // has to be kept in sync with the buttons by hand.
-            let reserved  = gap + browse_w + if has_path { gap + clear_w } else { 0.0 };
-            let text_w    = (ui.available_width() - reserved).max(60.0);
-
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut self.project_path_input)
-                    .hint_text("Select or paste path to .uproject…")
-                    .desired_width(text_w),
-            );
-            if !self.project_path_input.is_empty() {
-                let full_path = self.project_path_input.clone();
-                resp.clone().on_hover_text(full_path);
-            }
-            if resp.lost_focus() { self.try_apply_typed_path(); }
-
-            if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse…")).clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Unreal Project", &["uproject"])
-                    .set_title("Select your .uproject file")
-                    .pick_file()
-                {
-                    if path.is_file()
-                        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("uproject"))
-                    {
-                        save_project_path(&path);
-                        self.project_path_input = path.to_string_lossy().to_string();
-                        self.project_path       = Some(path);
-                        self.redetect_engine();
+                    dot(ui, accent(), 8.0);
+                    ui.add_space(2.0);
+                    ui.label(egui::RichText::new(format!("Version {} is available", info.version))
+                        .font(body(12.0)).color(TEXT));
+                    if self.update_confirm {
+                        ui.label(egui::RichText::new("replaces this .exe and restarts")
+                            .font(body(11.5)).color(AMBER));
                     } else {
-                        self.set_status("[ERROR] Select an existing .uproject file.".into());
+                        ui.label(hint(&format!("released {}", info.published_at)));
                     }
-                }
-
-            if has_path
-                && ui.add_sized([clear_w, 22.0], egui::Button::new("x  Clear")).clicked() {
-                    clear_project_path();
-                    self.project_path = None;
-                    self.project_path_input.clear();
-                    self.redetect_engine();
-                }
-        });
-
-        ui.add_space(2.0);
-        match &self.project_path {
-            Some(p) => {
-                let name = p.file_name().unwrap_or_default().to_string_lossy();
-                ui.colored_label(accent(), format!("[OK]  {}", name));
-            }
-            None if !self.project_path_input.trim().is_empty() => {
-                ui.colored_label(ERR_RED, "[!]  File not found or not a .uproject");
-            }
-            _ => {}
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_sized([64.0, 26.0], quiet(
+                            if self.update_confirm { "Cancel" } else { "Later" })).clicked() {
+                            if self.update_confirm {
+                                self.update_confirm = false;
+                            } else {
+                                self.show_update_banner = false;
+                            }
+                        }
+                        // Two-step, because this is irreversible: one click
+                        // downloads a release and replaces the running
+                        // executable with it, with no undo. Mis-clicking it
+                        // while aiming at the icon row beside it swaps the
+                        // binary out from under you.
+                        if self.update_confirm {
+                            if ui.add_sized([116.0, 26.0], chip("Confirm update", true)).clicked() {
+                                install = true;
+                            }
+                        } else if ui.add_sized([84.0, 26.0], chip("Update", true)).clicked() {
+                            self.update_confirm = true;
+                        }
+                    });
+                });
+            });
+        ui.add_space(12.0);
+        if install {
+            self.start_update_install(info);
         }
     }
+}
 
-    /// Engine location row: shows the auto-detected (or manually overridden)
-    /// engine folder, with a "Browse…" escape hatch for when auto-detection
-    /// (registry / EngineAssociation lookup) can't find it — e.g. a source
-    /// build or a non-standard install path.
-    pub fn show_engine_path_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Unreal Engine")
-            .size(12.0).color(egui::Color32::GRAY));
-        ui.add_space(4.0);
+impl DevToolApp {
+    /// Records this frame's duration and keeps a smoothed interval.
+    ///
+    /// `stable_dt` is egui's own smoothed frame time, which is the right input
+    /// for motion: it already reflects the display's real cadence, so a 144 Hz
+    /// monitor and a 60 Hz one both get the same *duration* of animation
+    /// rather than the same number of steps.
+    fn sample_frame_time(&mut self, ctx: &egui::Context) {
+        let raw = ctx.input(|i| i.stable_dt);
+        let dt = raw.clamp(1.0 / 480.0, 1.0 / 10.0);
+        self.frame_dt = dt;
 
-        ui.horizontal(|ui| {
-            let has_override = self.engine_override.is_some();
-            let path_text = self.engine_dir.as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "(not found — click Browse to select it manually)".to_string());
+        // Only frames that follow another frame are a measure of smoothness.
+        //
+        // This app sleeps when nothing is happening, so the first frame after
+        // an idle gap carries the whole gap as its delta — a 700ms pause reads
+        // as a 700ms "frame". Counting those made the tail look like severe
+        // stalls when it was just the app waking up, which is exactly the
+        // wrong conclusion to draw from a meter.
+        // The sample buffer only exists while the meter is switched on; the
+        // smoothed `frame_dt` above is what normal operation needs, and it
+        // costs nothing.
+        if std::env::var_os("UDT_FPS").is_none() {
+            return;
+        }
 
-            let browse_w = 78.0;
-            let auto_w   = 86.0;
-            let gap      = ui.spacing().item_spacing.x;
-            // This used to be a bare `172.0`/`86.0` that didn't match what
-            // the row below actually consumes (`78.0 + 86.0 + 2 *
-            // item_spacing.x` = 180.0 when the Auto-detect button is shown,
-            // vs. a reserved 172.0) — 8px short, so the row overflowed the
-            // card's right edge and clipped "x Auto-detect" at the window
-            // edge. Deriving the reservation from the real button widths +
-            // real spacing (like `show_project_path_row` does) keeps it
-            // correct regardless of button size changes, and `.max(60.0)`
-            // stops the label from going negative-width on a narrow window.
-            let reserved = gap + browse_w + if has_override { gap + auto_w } else { 0.0 };
-            let label_w  = (ui.available_width() - reserved).max(60.0);
+        const CONTINUOUS_MAX: f32 = 0.050;
+        if raw > CONTINUOUS_MAX {
+            self.wake_frames += 1;
+            return;
+        }
+        if self.frame_ms.len() >= 120 {
+            self.frame_ms.pop_front();
+        }
+        self.frame_ms.push_back(dt * 1000.0);
 
-            // `Label` defaults to `TextWrapMode::Extend` — it does NOT clip to
-            // its allocated size, it grows past it. Without `.truncate()` a
-            // long engine path overlaps the Browse/Auto-detect buttons that
-            // follow it in this row instead of eliding with "…".
-            ui.add_sized(
-                [label_w, 22.0],
-                egui::Label::new(egui::RichText::new(&path_text).size(12.0).color(HINT_GRAY)).truncate(),
-            ).on_hover_text(&path_text);
-
-            if ui.add_sized([browse_w, 22.0], egui::Button::new("Browse…")).clicked() {
-                self.choose_engine_dir();
+        if self.frame_ms.len() == 120 {
+            use std::io::Write;
+            let mut v: Vec<f32> = self.frame_ms.iter().copied().collect();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let avg = v.iter().sum::<f32>() / v.len() as f32;
+            let p50 = v[v.len() / 2];
+            let p95 = v[v.len() * 95 / 100];
+            let worst = v[v.len() - 1];
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                .open(std::env::temp_dir().join("udt_fps.txt")) {
+                let _ = writeln!(f, "avg={avg:.2}ms p50={p50:.2} p95={p95:.2} worst={worst:.2} -> {:.0} fps  (wakes excluded: {})",
+                    1000.0 / avg, self.wake_frames);
             }
-            if has_override && ui.add_sized([auto_w, 22.0], egui::Button::new("x  Auto-detect")).clicked() {
-                self.clear_engine_override();
-            }
-        });
-
-        ui.add_space(2.0);
-        match (&self.engine_dir, self.engine_override.is_some()) {
-            (Some(_), true)  => { ui.colored_label(accent(), "[OK]  Manual override"); }
-            (Some(_), false) => { ui.colored_label(accent(), "[OK]  Auto-detected"); }
-            (None, _) => {
-                ui.colored_label(ERR_RED, "[!]  Engine not found — select your Unreal Engine install folder");
-            }
+            self.frame_ms.clear();
         }
     }
+}
 
-    pub fn show_status_area(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Status / Output").size(12.0).color(egui::Color32::GRAY));
-        egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut self.status_display)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(4),
-            );
-        });
+/// A single soft glow, pushed mostly off-canvas.
+///
+/// The previous version drew an accent grid across the whole page plus two
+/// stacked glow stacks; at any alpha where the glow read at all, the grid was
+/// a visible lattice over every empty region. An aurora is something glass
+/// refracts, not something you look at.
+fn paint_ambient(ui: &egui::Ui) {
+    let rect = ui.max_rect();
+    let c = rect.left_top() + egui::vec2(-120.0, -150.0);
+    // Fewer, larger, fainter rings. Stacked fills compound, so five at alpha 2
+    // read as one solid teal wash across the top-left of every screen.
+    for i in 0..4 {
+        let radius = 220.0 + i as f32 * 120.0;
+        ui.painter().circle_filled(c, radius, acc(1));
     }
 }

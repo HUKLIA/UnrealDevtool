@@ -21,13 +21,9 @@ impl DevToolApp {
     pub fn show_space_warning_inline(&mut self, ui: &mut egui::Ui) {
         if !self.has_unfixed_space_issue() { return; }
 
-        egui::Frame::none()
-            .fill(egui::Color32::from_rgb(45, 35, 15))
-            .stroke(egui::Stroke::new(1.0, WARN_AMBER))
-            .rounding(egui::Rounding::same(6.0))
-            .inner_margin(egui::Margin::same(10.0))
+        callout(AMBER)
             .show(ui, |ui| {
-                ui.colored_label(WARN_AMBER, "⚠  Engine or project path contains a space");
+                ui.colored_label(AMBER, "Engine or project path contains a space");
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(
@@ -37,7 +33,7 @@ impl DevToolApp {
                          after a long build. Packaging and VS rebuild automatically route through a \
                          space-free NTFS junction; the button creates the link now and doesn't move \
                          or copy anything."
-                    ).size(10.5).color(egui::Color32::from_rgb(210, 190, 140)),
+                    ).size(10.5).color(SOFT),
                 );
                 ui.add_space(6.0);
                 if ui.add_sized([220.0, 26.0], egui::Button::new("🔧  Fix automatically (link to space-free path)")).clicked() {
@@ -56,22 +52,29 @@ impl DevToolApp {
     pub(crate) fn show_check_item(ui: &mut egui::Ui, item: &CheckItem) {
         let (prefix, color) = match item.status {
             CheckStatus::Ok   => ("OK",   accent()),
-            CheckStatus::Warn => ("WARN", WARN_AMBER),
-            CheckStatus::Fail => ("FAIL", ERR_RED),
+            CheckStatus::Warn => ("WARN", AMBER),
+            CheckStatus::Fail => ("FAIL", RED),
         };
         // Extra left margin leaves room for the colored rule painted after
         // the frame closes (once its final `rect` is known) without needing
         // a manual horizontal indent inside the content closure.
         let resp = egui::Frame::none()
-            .fill(PANEL_BG)
+            .fill(WELL)
             .rounding(egui::Rounding::same(5.0))
             .inner_margin(egui::Margin { left: 12.0, right: 8.0, top: 6.0, bottom: 6.0 })
             .show(ui, |ui| {
+                // Every row spans the list. Each one used to size to its own
+                // text, so a short check ("Disk space") drew a narrow box and a
+                // long path drew a wide one — the column read as ragged rather
+                // than as a list.
+                ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(prefix).size(9.5).monospace().strong().color(color));
-                    ui.label(egui::RichText::new(&item.label).size(11.5).color(egui::Color32::WHITE));
+                    ui.label(egui::RichText::new(&item.label).size(11.5).color(TEXT));
                 });
-                ui.label(egui::RichText::new(&item.detail).size(10.0).color(HINT_GRAY));
+                ui.add(egui::Label::new(
+                    egui::RichText::new(&item.detail).size(10.0).color(MUTED)).truncate())
+                    .on_hover_text(&item.detail);
             });
         // Thin colored rule down the left edge instead of a full `Stroke`
         // border, which draws on all four sides and would compete with the
@@ -89,25 +92,34 @@ impl DevToolApp {
         let Some(log) = &self.build_log_path else { return };
 
         ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(format!("Last build log: {}", log.display()))
-                .size(10.5).color(HINT_GRAY),
-        );
+        // Two labels, and the path one truncated, rather than one combined
+        // wrapping label.
+        //
+        // A build-log path has no spaces to break at, so as a single string it
+        // measured wider than the card and egui laid the *first* wrapped line
+        // out across that overflowing width — which rendered "Last build log:"
+        // with a space between every character. Truncating the path keeps the
+        // galley inside the card, and the full path is still available on
+        // hover for anyone who needs to go find the file.
+        ui.label(hint("Last build log"));
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(log.display().to_string()).size(10.0).color(MUTED).monospace(),
+            )
+            .truncate(),
+        )
+        .on_hover_text(log.display().to_string());
         ui.add_space(4.0);
 
         if self.build_log_diagnosis.is_empty() {
             ui.colored_label(accent(), "[OK]  No known error patterns found in the last build log.");
         } else {
             for d in &self.build_log_diagnosis {
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(45, 35, 15))
-                    .stroke(egui::Stroke::new(1.0, WARN_AMBER))
-                    .rounding(egui::Rounding::same(6.0))
-                    .inner_margin(egui::Margin::same(10.0))
+                callout(AMBER)
                     .show(ui, |ui| {
-                        ui.colored_label(WARN_AMBER, format!("⚠  {}", d.matched));
+                        ui.colored_label(AMBER, &d.matched);
                         ui.add_space(4.0);
-                        ui.label(egui::RichText::new(&d.explanation).size(10.5).color(egui::Color32::from_rgb(210, 190, 140)));
+                        ui.label(egui::RichText::new(&d.explanation).size(10.5).color(SOFT));
                         ui.add_space(4.0);
                         ui.label(egui::RichText::new(format!("Fix: {}", d.fix)).size(10.5).color(accent()));
                     });
@@ -132,8 +144,8 @@ impl DevToolApp {
             match &*self.pc_check_disk.lock().unwrap_or_else(|e| e.into_inner()) {
                 Some(item) => Self::show_check_item(ui, item),
                 None => {
-                    ui.colored_label(HINT_GRAY, "[..]  Disk space");
-                    ui.label(egui::RichText::new("Checking…").size(10.5).color(HINT_GRAY));
+                    ui.colored_label(MUTED, "[..]  Disk space");
+                    ui.label(egui::RichText::new("Checking…").size(10.5).color(MUTED));
                     ui.add_space(6.0);
                     ui.ctx().request_repaint();
                 }

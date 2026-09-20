@@ -7,16 +7,13 @@ impl DevToolApp {
     pub fn show_vs_config_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut do_start = false;
 
-        egui::Frame::none()
-            .fill(PANEL_DARK)
-            .stroke(egui::Stroke::new(1.0, accent()))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(14.0))
+        card()
+            .stroke(egui::Stroke::new(1.0, acc(110)))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("🔧  Rebuild Project Files").size(13.0).color(accent()));
+                ui.label(heading("Rebuild Project Files", 15.0));
                 ui.add_space(8.0);
 
-                ui.label(egui::RichText::new("Will clean from project folder:").size(11.0).color(egui::Color32::GRAY));
+                ui.label(egui::RichText::new("Will clean from project folder:").size(11.0).color(MUTED));
                 egui::Frame::none()
                     .fill(egui::Color32::from_rgb(18, 18, 26))
                     .rounding(egui::Rounding::same(4.0))
@@ -31,20 +28,20 @@ impl DevToolApp {
                     });
                 ui.add_space(10.0);
 
-                ui.label(egui::RichText::new("Open with after generation:").size(11.0).color(egui::Color32::GRAY));
+                ui.label(egui::RichText::new("Open with after generation:").size(11.0).color(MUTED));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     for (choice, label) in [
                         (IdeChoice::Rider,        "🚀  Rider"),
                         (IdeChoice::VisualStudio, "🖥  Visual Studio"),
-                        (IdeChoice::SkipOpen,     "x  Don't open"),
+                        (IdeChoice::SkipOpen,     "Don't open"),
                     ] {
                         let selected = self.ide_choice == choice;
                         let btn = egui::Button::new(
                             egui::RichText::new(label)
-                                .color(if selected { DARK_BG } else { egui::Color32::LIGHT_GRAY }),
+                                .color(if selected { BG } else { SOFT }),
                         )
-                        .fill(if selected { accent() } else { PANEL_BG });
+                        .fill(if selected { accent() } else { WELL });
                         if ui.add_sized([110.0, 30.0], btn).clicked() {
                             self.ide_choice = choice;
                         }
@@ -59,7 +56,7 @@ impl DevToolApp {
                     if ui.add_sized([190.0, 32.0], egui::Button::new(">>  Confirm & Rebuild")).clicked() {
                         do_start = true;
                     }
-                    if ui.add_sized([90.0, 32.0], egui::Button::new("x  Cancel")).clicked() {
+                    if ui.add_sized([90.0, 32.0], ghost("Cancel")).clicked() {
                         self.show_vs_config = false;
                     }
                 });
