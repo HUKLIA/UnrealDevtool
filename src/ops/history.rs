@@ -41,6 +41,8 @@ pub struct BuildInfo {
     pub secs:     u64,
     pub warnings: u32,
     pub errors:   u32,
+    /// The git commit the build was made from (empty when not a repository).
+    pub commit:   String,
     /// Seconds per stage in `ops::run::Stage` order; 0 = not reached.
     pub stage_secs: [u64; 4],
 }
@@ -50,9 +52,9 @@ pub const INFO_FILE: &str = "build-info.txt";
 impl BuildInfo {
     pub fn to_text(&self) -> String {
         format!(
-            "platform={}\nconfig={}\nok={}\nsecs={}\nwarnings={}\nerrors={}\nstages={},{},{},{}\n",
+            "platform={}\nconfig={}\nok={}\nsecs={}\nwarnings={}\nerrors={}\nstages={},{},{},{}\ncommit={}\n",
             self.platform, self.config, self.ok, self.secs, self.warnings, self.errors,
-            self.stage_secs[0], self.stage_secs[1], self.stage_secs[2], self.stage_secs[3],
+            self.stage_secs[0], self.stage_secs[1], self.stage_secs[2], self.stage_secs[3], self.commit,
         )
     }
 
@@ -66,6 +68,7 @@ impl BuildInfo {
             match k.trim() {
                 "platform" => info.platform = v.to_string(),
                 "config"   => info.config = v.to_string(),
+                "commit"   => info.commit = v.to_string(),
                 "ok"       => info.ok = v == "true",
                 "secs"     => info.secs = v.parse().unwrap_or(0),
                 "warnings" => info.warnings = v.parse().unwrap_or(0),
@@ -249,7 +252,7 @@ mod info_tests {
     fn build_info_round_trips_and_tolerates_junk() {
         let info = BuildInfo {
             platform: "Windows".into(), config: "Shipping".into(), ok: true,
-            secs: 692, warnings: 4, errors: 0, stage_secs: [120, 400, 60, 112],
+            secs: 692, warnings: 4, errors: 0, commit: "abc123def".into(), stage_secs: [120, 400, 60, 112],
         };
         assert_eq!(BuildInfo::parse(&info.to_text()), Some(info.clone()));
         assert_eq!(info.summary(), "Shipping · Windows · 11:32");

@@ -16,6 +16,7 @@ pub mod run;
 mod selfcheck;
 pub mod setup;
 pub mod shell;
+pub mod tools;
 mod vs;
 
 use eframe::egui;
@@ -441,6 +442,8 @@ impl DevToolApp {
                     secs:     duration.as_secs(),
                     warnings,
                     errors,
+                    commit: version_dir.as_ref().and_then(|_| self.git_project_dir())
+                        .and_then(|d| crate::ops::git::head_commit(&d)).unwrap_or_default(),
                     stage_secs: stages.map(|d| d.map(|d| d.as_secs()).unwrap_or(0)),
                 });
             }

@@ -386,6 +386,7 @@ pub enum Icon {
     Note,
     Cross,
     Pulse,
+    Wrench,
     ArrowLeft,
     ArrowRight,
     Reload,
@@ -450,6 +451,14 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, kind: Icon, color: egui::Col
             let b = egui::Rect::from_center_size(c - egui::vec2(1.5, 1.5), egui::vec2(r * 1.5, r * 1.5));
             p.rect_stroke(b, egui::Rounding::same(2.0), s);
             p.rect_stroke(a, egui::Rounding::same(2.0), s);
+        }
+        Icon::Wrench => {
+            // An open-ended spanner: a diagonal shaft with a notched head.
+            let a = c + egui::vec2(-r * 0.75, r * 0.75);
+            let b = c + egui::vec2(r * 0.25, -r * 0.25);
+            p.line_segment([a, b], egui::Stroke::new(2.4, color));
+            p.circle_stroke(c + egui::vec2(r * 0.42, -r * 0.42), r * 0.45, s);
+            p.line_segment([c + egui::vec2(r * 0.42, -r * 0.42), c + egui::vec2(r * 0.85, -r * 0.85)], egui::Stroke::new(3.0, BG));
         }
         Icon::Pulse => {
             // A heartbeat trace.

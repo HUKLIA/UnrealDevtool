@@ -180,6 +180,28 @@ pub fn save_uat_options(project_path: &Path, compress: bool, extra: &str, method
     }
 }
 
+// ── Per-project package size budget (`{stem}_budget.cfg`) ─────────────────────
+// One line: the most a package should weigh, in megabytes. 0 or missing = none.
+
+fn budget_file(project_path: &Path) -> Option<PathBuf> {
+    let stem = project_path.file_stem()?.to_string_lossy().to_string();
+    config_dir().map(|d| d.join(format!("{}_budget.cfg", stem)))
+}
+
+pub fn load_size_budget(project_path: &Path) -> u32 {
+    budget_file(project_path)
+        .and_then(|f| fs::read_to_string(f).ok())
+        .and_then(|t| t.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+pub fn save_size_budget(project_path: &Path, megabytes: u32) {
+    if let Some(f) = budget_file(project_path) {
+        if let Some(dir) = config_dir() { let _ = fs::create_dir_all(dir); }
+        let _ = fs::write(f, megabytes.to_string());
+    }
+}
+
 // ── Upload destination config (`upload.cfg`) ─────────────────────────────────
 // Line 1: local_copy_path
 // Line 2: rclone_dest  (e.g. "gdrive:/Builds/MyGame")

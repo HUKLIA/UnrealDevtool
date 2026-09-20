@@ -159,6 +159,11 @@ pub struct DevToolApp {
     pub compress_pak: bool,
     /// How the project is packaged (see `types::PackageMethod`).
     pub package_method: crate::types::PackageMethod,
+    /// The most a package should weigh, in MB (0 = no limit), and the text box for it.
+    pub size_budget_mb: u32,
+    pub size_budget_input: String,
+    /// State of the Unreal tools sheet.
+    pub tools: crate::ui::tools::ToolsState,
     /// Command palette (Ctrl+K).
     pub palette_open: bool,
     pub palette_query: String,
@@ -169,9 +174,14 @@ pub struct DevToolApp {
     pub schedule_input: String,
     /// Result of `ops::doctor::check_project`, refreshed on the slow poll.
     pub doctor_items: Vec<crate::ops::preflight::CheckItem>,
+    /// One-click fixes for what `doctor_items` found. Computed when the checks
+    /// sheet opens, not every poll: finding maps walks the Content folder.
+    pub doctor_fixes: Vec<crate::ops::doctor::Fix>,
     /// Live project monitor; exists only while its sheet is open.
     pub monitor: Option<crate::ops::monitor::MonitorHandle>,
     pub monitor_filter: crate::types::LogFilter,
+    /// Show only this log category (`LogCook`…) in the monitor's log.
+    pub monitor_category: Option<String>,
     /// The log as it was when Pause was pressed, so it can be read while the
     /// editor keeps writing.
     pub monitor_frozen: Option<Vec<crate::ops::monitor::LogEntry>>,
@@ -440,14 +450,19 @@ impl DevToolApp {
             iterate_cook: false,
             compress_pak: false,
             package_method: crate::types::PackageMethod::Full,
+            size_budget_mb: 0,
+            size_budget_input: String::new(),
+            tools: Default::default(),
             palette_open: false,
             palette_query: String::new(),
             palette_sel: 0,
             schedule: None,
             schedule_input: String::new(),
             doctor_items: Vec::new(),
+            doctor_fixes: Vec::new(),
             monitor: None,
             monitor_filter: crate::types::LogFilter::All,
+            monitor_category: None,
             monitor_frozen: None,
             extra_uat_args: String::new(),
             clean_targets: Vec::new(),
@@ -530,6 +545,47 @@ impl DevToolApp {
             "checks"  => { self.open_sheet(crate::types::Sheet::Diagnostics); return; }
             "extras"  => { self.open_sheet(crate::types::Sheet::Extras); return; }
             "palette" => { self.palette_open = true; return; }
+            "tools" | "tools-launch" | "tools-plugins" | "tools-content" | "tools-engines" | "tools-compare" | "tools-run" | "tools-cheat" => {
+                use crate::ui::tools::ToolsTab;
+                self.tools.tab = match mode.as_str() {
+                    "tools-launch" => ToolsTab::Launch,
+                    "tools-plugins" => ToolsTab::Plugins,
+                    "tools-content" => ToolsTab::Content,
+                    "tools-engines" => ToolsTab::Engines,
+                    "tools-cheat" => ToolsTab::Cheatsheet,
+                    _ => ToolsTab::Commandlets,
+                };
+                if mode == "tools-run"
+                    && let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
+                    let log = dir.join("Saved").join("Logs").join("DevTool_Validate_data.log");
+                    if log.is_file() {
+                        self.tools.run = Some(std::sync::Arc::new(std::sync::Mutex::new(
+                            crate::ops::tools::ToolRun::finished_from_log("Validate data", log, 1))));
+                    }
+                }
+                if mode == "tools-compare" {
+                    self.tools.tab = ToolsTab::Content;
+                    if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
+                        let recs = crate::ops::history::scan(dir);
+                        if let (Some(n), Some(o)) = (recs.first(), recs.get(1)) {
+                            let pack = self.pack_name_input.trim();
+                            let root = |b: &crate::ops::history::BuildRecord| {
+                                let d = b.dir.join(pack);
+                                if d.is_dir() { d } else { b.dir.clone() }
+                            };
+                            let c = crate::ops::insights::compare(&root(o), &root(n), crate::ops::insights::DEFAULT_BUDGET);
+                            self.tools.comparison = Some((o.version.clone(), n.version.clone(), c));
+                        }
+                    }
+                }
+                if mode == "tools-content"
+                    && let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
+                    self.tools.insights = Some(crate::ops::insights::scan(
+                        &dir.join("Content"), crate::ops::insights::DEFAULT_BUDGET));
+                }
+                self.open_sheet(crate::types::Sheet::Tools);
+                return;
+            }
             "guide"   => { self.open_guide(); self.guide_step = crate::ui::guide::step::CONFIGURE; return; }
             _ => {}
         }
@@ -557,7 +613,7 @@ impl DevToolApp {
             }
             return;
         }
-        let ok = mode == "ok";
+        let ok = mode == "ok" || mode == "android";
         self.last_build = Some(crate::types::BuildOutcome {
             version: "v0.0.11".into(),
             zip: ok.then(|| PathBuf::from("Q:/Demo/build/v0.0.11/Demo_v0.0.11.zip")),
@@ -568,7 +624,7 @@ impl DevToolApp {
             warnings: 4,
             errors: if ok { 0 } else { 3 },
             ok,
-            platform: self.build_target,
+            platform: if mode == "android" { BuildTarget::Android } else { self.build_target },
             config: self.build_configuration,
             log: None,
             error_samples: if ok { Vec::new() } else { vec![
@@ -837,6 +893,14 @@ impl DevToolApp {
         };
     }
 
+    /// Recomputes the one-click fixes (see `doctor_fixes`).
+    pub fn refresh_doctor_fixes(&mut self) {
+        self.doctor_fixes = match &self.project_path {
+            Some(p) => crate::ops::doctor::fixes(p),
+            None    => Vec::new(),
+        };
+    }
+
     /// Opens a sheet, doing whatever one-time refresh it needs on entry.
     pub fn open_sheet(&mut self, sheet: Sheet) {
         self.sheet = Some(sheet);
@@ -844,13 +908,14 @@ impl DevToolApp {
             Sheet::Chat        => self.open_chat_panel(),
             Sheet::Diagnostics => {
                 self.refresh_doctor();
+                self.refresh_doctor_fixes();
                 self.refresh_pc_check();
                 self.refresh_clean_targets();
             }
             Sheet::Extras      => {
                 if self.extras_tab == ExtrasTab::SelfCheck { self.refresh_app_check(); }
             }
-            Sheet::Browser | Sheet::Settings | Sheet::Monitor => {}
+            Sheet::Browser | Sheet::Settings | Sheet::Monitor | Sheet::Tools => {}
         }
     }
 
@@ -1177,6 +1242,8 @@ impl DevToolApp {
         self.compress_pak = compress;
         self.extra_uat_args = extra;
         self.package_method = method;
+        self.size_budget_mb = crate::config::load_size_budget(&project_path);
+        self.size_budget_input = if self.size_budget_mb > 0 { self.size_budget_mb.to_string() } else { String::new() };
 
         self.refresh_package_observed();
         // Default the editable version field to the next auto-incremented

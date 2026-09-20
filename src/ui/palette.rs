@@ -26,6 +26,12 @@ enum Cmd {
     GitMenu,
     GitSync,
     CopyReport,
+    /// Open a web address (a search).
+    Web(String),
+    /// Put the typed text in the Dev Assistant's input and open it.
+    Ask(String),
+    /// Copy a console command or launch flag to the clipboard.
+    Copy(&'static str),
 }
 
 struct Entry {
@@ -58,6 +64,7 @@ impl DevToolApp {
 
         for (s, label) in [
             (Sheet::Monitor, "Open project monitor"),
+            (Sheet::Tools, "Open Unreal tools (commandlets, launch, size, plugins)"),
             (Sheet::Diagnostics, "Open project setup & checks"),
             (Sheet::Chat, "Open dev assistant"),
             (Sheet::Browser, "Open browser"),
@@ -105,6 +112,30 @@ impl DevToolApp {
         if self.last_build.is_some() {
             v.push(e("Copy last build report", "", Cmd::CopyReport));
         }
+
+        // Console commands and flags, when what is typed matches one.
+        let q0 = self.palette_query.trim();
+        if q0.chars().count() >= 2 {
+            for c in crate::ops::cheatsheet::search(q0).into_iter().take(4) {
+                v.push(Entry { label: format!("Copy: {}", c.text), hint: if c.flag { "flag" } else { "console" }, cmd: Cmd::Copy(c.text) });
+            }
+        }
+
+        // Typing more than a command name turns the rest into a lookup: the
+        // question someone has mid-task is usually "what does this error mean".
+        let q = self.palette_query.trim();
+        if q.chars().count() >= 3 {
+            let enc = crate::ops::crash::url_encode(q);
+            let search = |site: &str| format!("https://www.google.com/search?q=site%3A{site}+{enc}");
+            v.push(Entry { label: format!("Search Unreal docs: {q}"), hint: "web",
+                cmd: Cmd::Web(search("dev.epicgames.com%2Fdocumentation")) });
+            v.push(Entry { label: format!("Search Unreal forums: {q}"), hint: "web",
+                cmd: Cmd::Web(search("forums.unrealengine.com")) });
+            v.push(Entry { label: format!("Search the web for: unreal engine {q}"), hint: "web",
+                cmd: Cmd::Web(format!("https://www.google.com/search?q=unreal+engine+{enc}")) });
+            v.push(Entry { label: format!("Ask the Dev Assistant: {q}"), hint: "local model",
+                cmd: Cmd::Ask(q.to_string()) });
+        }
         v
     }
 
@@ -141,6 +172,9 @@ impl DevToolApp {
                 self.show_git_sheet = true;
             }
             Cmd::GitSync => self.git_start_sync(),
+            Cmd::Web(url) => { let _ = crate::ops::cmd("explorer").arg(url).spawn(); }
+            Cmd::Copy(text) => { ctx.copy_text(text.to_string()); self.set_status(format!("Copied: {text}")); }
+            Cmd::Ask(text) => { self.chat_input = text; self.open_sheet(Sheet::Chat); }
             Cmd::CopyReport => if let Some(out) = self.last_build.clone() {
                 let report = self.build_report(&out);
                 ctx.copy_text(report);

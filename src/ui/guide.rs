@@ -86,6 +86,11 @@ const STEPS: &[Step] = &[
         sheet: Some(Sheet::Monitor),
     },
     Step {
+        title: "Unreal tools",
+ body:  "Jobs you would otherwise do from a terminal or by opening the editor: run commandlets (compile all Blueprints, validate data, fill the derived-data cache), launch the editor or a game with flags, see what makes the project or a build big and what grew since the last one, switch plugins on or off, and check or switch engine versions — plus a cheatsheet of console commands.",
+        sheet: Some(Sheet::Tools),
+    },
+    Step {
         title: "Dev Assistant",
         body:  "A local LLM (Ollama or LM Studio) with your project, engine and branch \
                 sent as context on every message. Nothing leaves your machine.",
@@ -128,10 +133,11 @@ pub mod step {
     pub const SOURCE:      usize = 7;
     pub const CHECKS:      usize = 8;
     pub const MONITOR:     usize = 9;
-    pub const CHAT:        usize = 10;
-    pub const BROWSER:     usize = 11;
-    pub const EXTRAS:      usize = 12;
-    pub const SETTINGS:    usize = 13;
+    pub const TOOLS:       usize = 10;
+    pub const CHAT:        usize = 11;
+    pub const BROWSER:     usize = 12;
+    pub const EXTRAS:      usize = 13;
+    pub const SETTINGS:    usize = 14;
 }
 
 impl DevToolApp {

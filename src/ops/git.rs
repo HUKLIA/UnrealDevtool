@@ -21,6 +21,31 @@ pub fn run_git(dir: &Path, args: &[&str]) -> (bool, String) {
     }
 }
 
+/// The commit HEAD points at, in full. `None` outside a repository.
+pub fn head_commit(dir: &Path) -> Option<String> {
+    let (ok, out) = run_git(dir, &["rev-parse", "HEAD"]);
+    let h = out.trim();
+    (ok && h.len() >= 7 && h.chars().all(|c| c.is_ascii_hexdigit())).then(|| h.to_string())
+}
+
+/// One line per commit ("abc1234 subject"), newest first, for release notes.
+///
+/// `since` is the commit the previous build was made from; the range is
+/// everything after it. If that commit is gone (a rebase rewrote it) or none
+/// was recorded, the latest `fallback` commits are used instead so there are
+/// still notes. Merge commits are left out: their subjects are noise.
+pub fn changes_since(dir: &Path, since: Option<&str>, fallback: usize) -> Vec<String> {
+    let lines = |out: &str| out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    if let Some(from) = since {
+        let range = format!("{from}..HEAD");
+        let (ok, out) = run_git(dir, &["log", "--no-merges", "--pretty=format:%h %s", &range]);
+        if ok { return lines(&out); }
+    }
+    let n = format!("-{fallback}");
+    let (ok, out) = run_git(dir, &["log", "--no-merges", "--pretty=format:%h %s", &n]);
+    if ok { lines(&out) } else { Vec::new() }
+}
+
 pub fn is_conflict(output: &str) -> bool {
     output.contains("CONFLICT")
         || output.contains("Automatic merge failed")
@@ -477,4 +502,46 @@ pub fn task_git_create_branch(
     *progress.lock().unwrap() = 1.0;
     *result.lock().unwrap() = Some(GitTaskStatus::Ok);
     format!("[DONE] Created and switched to  {}", name)
+}
+
+#[cfg(test)]
+mod release_notes_tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let (ok, out) = run_git(dir, args);
+        assert!(ok, "git {args:?} failed: {out}");
+    }
+
+    #[test]
+    fn changes_are_listed_between_two_builds() {
+        let dir = std::env::temp_dir().join(format!("udt-notes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["config", "user.email", "t@example.com"]);
+        git(&dir, &["config", "user.name", "T"]);
+        git(&dir, &["config", "commit.gpgsign", "false"]);
+        let commit = |name: &str| {
+            std::fs::write(dir.join(name), name).unwrap();
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-q", "-m", &format!("Add {name}")]);
+        };
+
+        assert_eq!(head_commit(&dir), None, "no commits yet");
+        commit("a");
+        let first = head_commit(&dir).expect("head");
+        commit("b");
+        commit("c");
+
+        let since = changes_since(&dir, Some(&first), 15);
+        assert_eq!(since.len(), 2);
+        assert!(since[0].ends_with("Add c") && since[1].ends_with("Add b"), "newest first: {since:?}");
+
+        // No earlier record, or a commit that no longer exists: the latest few.
+        assert_eq!(changes_since(&dir, None, 2).len(), 2);
+        assert_eq!(changes_since(&dir, Some("0123456789abcdef0123456789abcdef01234567"), 15).len(), 3);
+        assert!(changes_since(&dir, Some(&head_commit(&dir).unwrap()), 15).is_empty(), "nothing new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

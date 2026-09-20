@@ -270,6 +270,25 @@ impl DevToolApp {
                 });
             }
 
+            // Windows' 260-character path limit, measured as it will be once packaged.
+            if let Some((n, rel)) = &h.longest_path {
+                ui.add_space(6.0);
+                let (color, note) = match *n {
+                    260.. => (RED, "over the Windows limit — packaging will fail"),
+                    240.. => (AMBER, "close to the Windows limit of 260"),
+                    _     => (SOFT, "within the Windows limit of 260"),
+                };
+                ui.horizontal_wrapped(|ui| {
+                    dot(ui, color, 7.0);
+                    ui.label(egui::RichText::new(format!("Longest path when packaged: {n} characters — {note}"))
+                        .font(body(11.5)).color(color));
+                });
+                if *n >= 240 {
+                    ui.add(egui::Label::new(egui::RichText::new(rel).font(mono(10.0)).color(DIM)).truncate())
+                        .on_hover_text(rel);
+                }
+            }
+
             // Crashes.
             ui.add_space(8.0);
             divider(ui);
@@ -291,6 +310,39 @@ impl DevToolApp {
                         });
                     });
                     ui.label(hint(name));
+                    if let Some(c) = &h.crash_info {
+                        ui.add_space(8.0);
+                        deep().inner_margin(egui::Margin::symmetric(12.0, 10.0)).show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            let title = format!("{} in {}",
+                                if c.kind.is_empty() { "Crash" } else { &c.kind },
+                                if c.executable.is_empty() { "Unreal" } else { &c.executable });
+                            ui.label(egui::RichText::new(title).font(body(12.0)).color(RED));
+                            if !c.message.is_empty() {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(&c.message).font(mono(10.5)).color(SOFT)).wrap());
+                            }
+                            if !c.stack.is_empty() {
+                                ui.add_space(6.0);
+                                egui::CollapsingHeader::new(egui::RichText::new("Call stack").font(body(11.5)).color(MUTED))
+                                    .id_salt("crash_stack").show(ui, |ui| {
+                                    for f in &c.stack {
+                                        ui.add(egui::Label::new(egui::RichText::new(f).font(mono(10.0)).color(DIM)).truncate());
+                                    }
+                                });
+                            }
+                            ui.add_space(6.0);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.add(quiet("Copy details")).clicked() { ui.ctx().copy_text(c.report()); }
+                                if ui.add(quiet("Search this error"))
+                                    .on_hover_text("Opens a web search for the error message").clicked() {
+                                    let url = format!("https://www.google.com/search?q={}",
+                                        crate::ops::crash::url_encode(&c.search_terms()));
+                                    let _ = crate::ops::cmd("explorer").arg(url).spawn();
+                                }
+                            });
+                        });
+                    }
                 }
                 None => {
                     ui.horizontal(|ui| {
@@ -317,6 +369,8 @@ impl DevToolApp {
         let paused = self.monitor_frozen.is_some();
 
         let mut new_filter = filter;
+        let mut new_category = self.monitor_category.clone();
+        let category = self.monitor_category.clone();
         let mut toggle_pause = false;
         let mut copy = false;
         let mut open_file: Option<std::path::PathBuf> = None;
@@ -347,6 +401,27 @@ impl DevToolApp {
                     toggle_pause = true;
                 }
             });
+            // Where the noise comes from: the categories logging the most
+            // warnings and errors. Click one to see only its lines.
+            let mut cats: Vec<(&String, &(u32, u32))> = d.categories.iter().collect();
+            cats.sort_by_key(|(name, (w, e))| (std::cmp::Reverse(e * 4 + w), (*name).clone()));
+            if !cats.is_empty() {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(hint("Noisiest"));
+                    for (name, (w, e)) in cats.into_iter().take(6) {
+                        let on = category.as_deref() == Some(name.as_str());
+                        let label = match (w, e) {
+                            (w, 0) => format!("{name}  {w}w"),
+                            (0, e) => format!("{name}  {e}e"),
+                            (w, e) => format!("{name}  {w}w {e}e"),
+                        };
+                        if ui.add(chip(&label, on)).on_hover_text("Show only this category").clicked() {
+                            new_category = if on { None } else { Some(name.clone()) };
+                        }
+                    }
+                });
+            }
             ui.add_space(8.0);
 
             let entries: Vec<&LogEntry> = match &frozen {
@@ -357,7 +432,7 @@ impl DevToolApp {
                 LogFilter::All      => true,
                 LogFilter::Warnings => e.level == Level::Warn,
                 LogFilter::Errors   => e.level == Level::Error,
-            }).collect();
+            }).filter(|e| category.as_deref().is_none_or(|c| e.text.contains(&format!("{c}:")))).collect();
 
             let footer_h = 30.0;
             let list_h = (inner_h - (ui.cursor().min.y - y0) - footer_h - ui.spacing().item_spacing.y).max(60.0);
@@ -419,6 +494,7 @@ impl DevToolApp {
         }
         drop(d);
         self.monitor_filter = new_filter;
+        self.monitor_category = new_category;
         if let Some(p) = open_file {
             let _ = crate::ops::cmd("explorer").arg(p).spawn();
         }

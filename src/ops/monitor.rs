@@ -90,8 +90,14 @@ pub struct Health {
     /// project, seconds since modified).
     pub recent:       Vec<(String, u64)>,
     pub changed_10m:  usize,
+    /// The longest file path in the project once packaged, as the number of
+    /// characters it will have and the project-relative path it came from.
+    /// Windows stops working at 260, and cooking adds a prefix of its own.
+    pub longest_path: Option<(usize, String)>,
     /// Newest folder under `Saved/Crashes`: (name, seconds ago).
     pub crash:        Option<(String, u64)>,
+    /// The newest crash, read: what happened and where.
+    pub crash_info:   Option<crate::ops::crash::CrashInfo>,
     pub scan_ms:      u128,
 }
 
@@ -111,6 +117,9 @@ pub struct MonitorData {
     /// Latest work-in-progress counts the editor has logged: shaders still to
     /// compile, and packages still to cook. `None` until one is seen.
     pub shaders_left: Option<u32>,
+    /// Warnings and errors per log category, as (warnings, errors). Says where
+    /// the noise is coming from at a glance.
+    pub categories: HashMap<String, (u32, u32)>,
     pub cook_remaining: Option<u32>,
     log_offset:    u64,
     log_partial:   String,
@@ -199,7 +208,7 @@ fn worker(
         let building = *busy.lock().unwrap_or_else(|e| e.into_inner());
         let due = last_health.is_none_or(|t| t.elapsed() >= HEALTH_EVERY);
         if due && !building {
-            let health = scan_health(&project_dir);
+            let health = scan_health(&project_dir, &stem);
             let mut d = data.lock().unwrap_or_else(|e| e.into_inner());
             d.health = health;
             d.health_at = Some(Instant::now());
@@ -389,6 +398,7 @@ fn tail_log(d: &mut MonitorData, path: &Path) {
         d.errors = 0;
         d.shaders_left = None;
         d.cook_remaining = None;
+        d.categories.clear();
         d.log_partial.clear();
         d.log_offset = len.saturating_sub(ATTACH_TAIL_BYTES);
         skip_partial = d.log_offset > 0;
@@ -410,8 +420,7 @@ fn tail_log(d: &mut MonitorData, path: &Path) {
     if skip_partial { lines.next(); } // began mid-line
     for raw in lines {
         if raw.trim().is_empty() { continue; }
-        if let Some(n) = number_before(raw, "shaders left to compile")
-            .or_else(|| number_before(raw, "shaders remaining")) {
+        if let Some(n) = shaders_left(raw) {
             d.shaders_left = Some(n);
         }
         if let Some(n) = number_after(raw, "Packages Remain") {
@@ -423,9 +432,31 @@ fn tail_log(d: &mut MonitorData, path: &Path) {
             Level::Error => d.errors += 1,
             Level::Normal => {}
         }
+        let text: String = tidy_ue_line(raw).chars().take(400).collect();
+        if level != Level::Normal && let Some(cat) = category_of(&text) {
+            let c = d.categories.entry(cat.to_string()).or_insert((0, 0));
+            if level == Level::Warn { c.0 += 1 } else { c.1 += 1 }
+        }
         if d.log.len() >= MAX_LOG_LINES { d.log.pop_front(); }
-        d.log.push_back(LogEntry { text: tidy_ue_line(raw).chars().take(400).collect(), level });
+        d.log.push_back(LogEntry { text, level });
     }
+}
+
+/// The log category of a tidied line: `LogCook` in `10:11:12  LogCook: Warning: …`.
+pub fn category_of(text: &str) -> Option<&str> {
+    let after_time = text.split_once("  ").map(|(_, rest)| rest).unwrap_or(text);
+    let word = after_time.split(':').next()?;
+    (word.starts_with("Log") && word.len() > 3 && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .then_some(word)
+}
+
+/// Shaders still to compile, from either wording Unreal uses:
+/// "Shaders left to compile 128" or "128 shaders left to compile".
+fn shaders_left(line: &str) -> Option<u32> {
+    let l = line.to_ascii_lowercase();
+    number_after(&l, "shaders left to compile")
+        .or_else(|| number_before(&l, "shaders left to compile"))
+        .or_else(|| number_before(&l, "shaders remaining"))
 }
 
 /// The integer just before `marker`, e.g. `128` in "128 shaders left to compile".
@@ -446,11 +477,15 @@ fn number_after(line: &str, marker: &str) -> Option<u32> {
 const SIZED: [&str; 7] = ["Content", "Source", "Config", "Intermediate", "Saved", "Binaries", "DerivedDataCache"];
 const EDITED: [&str; 3] = ["Content", "Source", "Config"];
 
-fn scan_health(project_dir: &Path) -> Health {
+fn scan_health(project_dir: &Path, stem: &str) -> Health {
     let started = Instant::now();
     let now = SystemTime::now();
     let mut health = Health::default();
     let mut recent: Vec<(SystemTime, PathBuf)> = Vec::new();
+    // `<project>\build\vX.Y.ZZ\<pack>\<Project>\` sits in front of every
+    // packaged file's project-relative path.
+    let packaged_prefix = project_dir.to_string_lossy().len() + r"\build\v0.0.00\".len() + 2 * stem.len() + 2;
+    let mut longest: Option<(usize, PathBuf)> = None;
 
     for name in SIZED {
         let dir = project_dir.join(name);
@@ -461,6 +496,11 @@ fn scan_health(project_dir: &Path) -> Health {
         let track = EDITED.contains(&name);
         let (bytes, partial) = walk_size(&dir, started, |path, mtime| {
             if !track { return; }
+            let rel_len = path.strip_prefix(project_dir).map(|r| r.to_string_lossy().len()).unwrap_or(0);
+            let est = packaged_prefix + rel_len;
+            if longest.as_ref().is_none_or(|(l, _)| est > *l) {
+                longest = Some((est, path.to_path_buf()));
+            }
             if now.duration_since(mtime).is_ok_and(|a| a.as_secs() <= 600) {
                 health.changed_10m += 1;
             }
@@ -474,9 +514,13 @@ fn scan_health(project_dir: &Path) -> Health {
         health.folders.push(FolderInfo { name, bytes, exists: true, partial });
     }
 
+    health.longest_path = longest.map(|(n, p)| {
+        let rel = p.strip_prefix(project_dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+        (n, rel)
+    });
     health.recent = recent.into_iter()
         .map(|(t, p)| {
-            let rel = p.strip_prefix(project_dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+        let rel = p.strip_prefix(project_dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
             (rel, now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0))
         })
         .collect();
@@ -493,6 +537,7 @@ fn scan_health(project_dir: &Path) -> Health {
             .map(|(t, n)| (n, now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0)));
     }
 
+    health.crash_info = crate::ops::crash::latest(project_dir);
     health.scan_ms = started.elapsed().as_millis();
     health
 }
@@ -622,7 +667,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("Saved/Crashes/UECC-1")).unwrap();
         std::fs::write(dir.join("Content/Maps/Main.umap"), vec![0u8; 5000]).unwrap();
 
-        let h = scan_health(&dir);
+        let h = scan_health(&dir, "Game");
         let content = h.folders.iter().find(|f| f.name == "Content").unwrap();
         assert!(content.exists && content.bytes == 5000 && !content.partial);
         assert!(!h.folders.iter().find(|f| f.name == "Binaries").unwrap().exists);
@@ -658,6 +703,10 @@ mod tests {
         assert_eq!(number_before("nothing relevant", "shaders left to compile"), None);
         assert_eq!(number_after("LogCook: Cooked packages 4210 Packages Remain 1730 Total 5940", "Packages Remain"), Some(1730));
         assert_eq!(number_after("Packages Remain soon", "Packages Remain"), None);
+        // The wording the 5.7 editor really prints.
+        assert_eq!(shaders_left("LogShaderCompilers: Display: Shaders left to compile 37"), Some(37));
+        assert_eq!(shaders_left("LogShaderCompilers: Display: 12 shaders left to compile"), Some(12));
+        assert_eq!(shaders_left("unrelated"), None);
 
         let dir = std::env::temp_dir().join(format!("udt-wip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -669,6 +718,40 @@ mod tests {
         let mut d = MonitorData::default();
         tail_log(&mut d, &log);
         assert_eq!((d.shaders_left, d.cook_remaining), (Some(40), Some(99)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_longest_packaged_path_is_estimated_with_its_prefix() {
+        let dir = std::env::temp_dir().join(format!("udt-longpath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Content/Deep/Deeper")).unwrap();
+        std::fs::write(dir.join("Content/Short.uasset"), "x").unwrap();
+        std::fs::write(dir.join("Content/Deep/Deeper/A_Very_Long_Asset_Name.uasset"), "x").unwrap();
+        let h = scan_health(&dir, "Game");
+        let (n, rel) = h.longest_path.expect("a path");
+        assert_eq!(rel, "Content/Deep/Deeper/A_Very_Long_Asset_Name.uasset");
+        let prefix = dir.to_string_lossy().len() + r"\build\v0.0.00\".len() + 2 * "Game".len() + 2;
+        assert_eq!(n, prefix + rel.len());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn categories_are_counted_from_warnings_and_errors() {
+        assert_eq!(category_of("13:52:20  LogDataTable: Error: Missing RowStruct"), Some("LogDataTable"));
+        assert_eq!(category_of("LogTemp: Warning: no timestamp"), Some("LogTemp"));
+        assert_eq!(category_of("13:52:20  Some free text: not a category"), None);
+        assert_eq!(category_of("13:52:20  Log: too short"), None);
+
+        let dir = std::env::temp_dir().join(format!("udt-cats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("G.log");
+        std::fs::write(&log, "[2026.09.20-10.00.00:000][1]LogCook: Warning: a\n[2026.09.20-10.00.00:000][2]LogCook: Warning: b\n[2026.09.20-10.00.01:000][3]LogTemp: Error: c\n[2026.09.20-10.00.02:000][4]LogTemp: Display: fine\n").unwrap();
+        let mut d = MonitorData::default();
+        tail_log(&mut d, &log);
+        assert_eq!(d.categories.get("LogCook"), Some(&(2, 0)));
+        assert_eq!(d.categories.get("LogTemp"), Some(&(0, 1)), "only warnings and errors are counted");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -199,6 +199,7 @@ pub enum Sheet {
     Extras,
     Diagnostics,
     Monitor,
+    Tools,
     Settings,
 }
 
@@ -210,6 +211,7 @@ impl Sheet {
             Sheet::Extras      => "Extras",
             Sheet::Diagnostics => "Project setup & checks",
             Sheet::Monitor     => "Project monitor",
+            Sheet::Tools       => "Unreal tools",
             Sheet::Settings    => "Settings",
         }
     }

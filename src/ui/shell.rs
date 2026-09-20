@@ -9,9 +9,9 @@ pub const TOPBAR_H: f32 = 54.0;
 /// Give the compact top bar a second row when the host window is narrower
 /// than the normal desktop layout. This keeps the controls visible instead
 /// of letting a fixed right rail push them off-screen.
-/// Width the icon cluster needs: seven 32px buttons, six 8px gaps, and the
+/// Width the icon cluster needs: eight 32px buttons, seven 8px gaps, and the
 /// trailing inset.
-pub const ICONS_W: f32 = 7.0 * 32.0 + 6.0 * 8.0 + 14.0;
+pub const ICONS_W: f32 = 8.0 * 32.0 + 7.0 * 8.0 + 14.0;
 
 /// Smallest identity region worth keeping on the same row as the icons.
 const IDENTITY_MIN: f32 = 180.0;
@@ -148,6 +148,12 @@ impl DevToolApp {
                 self.guide_anchor(crate::ui::guide::step::CHECKS, checks.rect);
                 if checks.clicked() {
                     self.toggle_sheet(Sheet::Diagnostics);
+                }
+                let tools = icon_button(ui, Icon::Wrench, open == Some(Sheet::Tools))
+                    .on_hover_text("Unreal tools — commandlets, launch, size analysis, plugins");
+                self.guide_anchor(crate::ui::guide::step::TOOLS, tools.rect);
+                if tools.clicked() {
+                    self.toggle_sheet(Sheet::Tools);
                 }
                 let monitor = icon_button(ui, Icon::Pulse, open == Some(Sheet::Monitor))
                     .on_hover_text("Project monitor — live processes, editor log and project health");
@@ -289,6 +295,7 @@ impl DevToolApp {
             Sheet::Browser     => self.show_browser_tab(ui),
             Sheet::Extras      => self.show_extras_tab(ui),
             Sheet::Monitor     => self.show_monitor_sheet(ui),
+            Sheet::Tools       => self.show_tools_sheet(ui),
             Sheet::Diagnostics => {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     self.show_project_checks_sheet(ui);
@@ -311,6 +318,7 @@ fn sheet_key(s: Sheet) -> usize {
         Sheet::Diagnostics => 4,
         Sheet::Settings => 5,
         Sheet::Monitor => 6,
+        Sheet::Tools => 7,
     }
 }
 

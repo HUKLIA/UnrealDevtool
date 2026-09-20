@@ -1,17 +1,24 @@
+pub mod cheatsheet;
+pub mod adb;
 pub mod clean;
+pub mod crash;
 pub mod clock;
 pub mod diagnostics;
+pub mod engines;
 pub mod doctor;
 pub mod discord;
 pub mod git;
 pub mod history;
+pub mod insights;
 pub mod llm;
 pub mod monitor;
 pub mod package;
+pub mod plugins;
 pub mod preflight;
 pub mod rclone;
 pub mod run;
 pub mod selfcheck;
+pub mod tools;
 pub mod update;
 pub mod vs;
 

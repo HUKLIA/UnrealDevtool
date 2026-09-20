@@ -911,13 +911,13 @@ fn uat_failure_details(log_path: &Path) -> String {
 /// Kills `pid` and its entire descendant process tree (e.g. `cmd.exe` ->
 /// AutomationTool -> UnrealBuildTool / UnrealEditor-Cmd). Plain `Child::kill`
 /// only kills the immediate process and leaves such descendants running.
-fn kill_process_tree(pid: u32) {
+pub(crate) fn kill_process_tree(pid: u32) {
     let _ = crate::ops::cmd("taskkill")
         .args(["/f", "/t", "/pid", &pid.to_string()])
         .output();
 }
 
-fn is_process_running(exe_name: &str) -> bool {
+pub(crate) fn is_process_running(exe_name: &str) -> bool {
     crate::ops::cmd("tasklist")
         .args(["/fi", &format!("imagename eq {}", exe_name), "/fo", "csv", "/nh"])
         .output()

@@ -269,6 +269,10 @@ pub fn level_of(line: &str) -> Level {
 /// Drops UAT's leading timestamp/tag noise so the visible line starts with
 /// what actually happened.
 fn tidy(line: &str) -> String {
+    // Unreal's own log format: `[2026.09.20-10.11.12:123][ 45]LogX: …`.
+    if line.trim_start().starts_with('[') && line.contains("][") {
+        return crate::ops::monitor::tidy_ue_line(line.trim()).chars().take(200).collect();
+    }
     let mut s = line.trim();
 
     // "  2026.09.19-01.20.33: LogCook: ..." — cut at the first ": " that

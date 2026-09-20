@@ -40,33 +40,45 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # The version is whatever Cargo.toml says — bump it there to cut a new
-      # release (1.0.1 -> 1.0.2). It used to be rewritten to 0.0.<run number> on
-      # every push, which made version numbers meaningless and could not
-      # express a 1.0 release at all.
-      - name: Read version
+      # Every push to main is a new release, numbered automatically.
+      #
+      # Cargo.toml holds the series (MAJOR.MINOR, e.g. 1.0). The patch number is
+      # the highest existing tag in that series plus one, so pushes give
+      # v1.0.2, v1.0.3, v1.0.4… To start a new series, change the series in
+      # Cargo.toml (1.1.0): the first release of a series uses the patch written
+      # there. The bumped number exists only inside this build — nothing is
+      # committed back, so a release cannot trigger another release.
+      - name: Work out the next version
         id: version
         shell: pwsh
         run: |
-          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-          if ($ver -notmatch '^\d+\.\d+\.\d+$') { throw "Cargo.toml version '$ver' is not MAJOR.MINOR.PATCH" }
-          $tag = "v$ver"
-          # A tag that is already released means this push did not change the
-          # version (a docs fix, say): do not rebuild or replace that release.
-          git ls-remote --exit-code --tags origin "refs/tags/$tag" *> $null
-          $exists = ($LASTEXITCODE -eq 0).ToString().ToLower()
+          $line = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"').Matches[0]
+          $major = [int]$line.Groups[1].Value
+          $minor = [int]$line.Groups[2].Value
+          $patch = [int]$line.Groups[3].Value
+
+          $pattern = "refs/tags/v$major\.$minor\.(\d+)$"
+          $existing = @(git ls-remote --tags origin "refs/tags/v$major.$minor.*" |
+              ForEach-Object { if ($_ -match $pattern) { [int]$Matches[1] } })
           $global:LASTEXITCODE = 0
+          if ($existing.Count -gt 0) { $patch = ($existing | Measure-Object -Maximum).Maximum + 1 }
+
+          $ver = "$major.$minor.$patch"
           echo "version=$ver" >> $env:GITHUB_OUTPUT
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
-          echo "exists=$exists" >> $env:GITHUB_OUTPUT
-          echo "Version: $tag (already released: $exists)"
+          echo "tag=v$ver" >> $env:GITHUB_OUTPUT
+          echo "Releasing v$ver"
+
+      - name: Stamp the version into this build
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          (Get-Content Cargo.toml) -replace '^version\s*=\s*"[^"]+"', "version = `"$ver`"" | Set-Content Cargo.toml
+          echo "Cargo.toml version set to $ver for this build"
 
       - name: Build release
-        if: ${{ steps.version.outputs.exists != 'true' }}
         run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Delete existing latest tag
-        if: ${{ steps.version.outputs.exists != 'true' }}
         shell: pwsh
         run: |
           git tag -d latest 2>$null; exit 0
@@ -75,14 +87,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Stage release artifact
-        if: ${{ steps.version.outputs.exists != 'true' }}
         run: Copy-Item target\x86_64-pc-windows-msvc\release\unreal_devtool.exe unreal_devtool.exe
 
       # Published alongside the exe so the in-app updater can verify what it
       # downloaded before installing it (see ops/update.rs), and so anyone can
       # independently confirm a download matches the release.
       - name: Compute SHA-256
-        if: ${{ steps.version.outputs.exists != 'true' }}
         id: hash
         run: |
           $h = (Get-FileHash unreal_devtool.exe -Algorithm SHA256).Hash.ToLower()
@@ -101,7 +111,7 @@ jobs:
       # your .pfx into the WINDOWS_CERT_BASE64 secret and put its password in
       # WINDOWS_CERT_PASSWORD.
       - name: Sign executable
-        if: ${{ env.SIGNING_CERT != '' && steps.version.outputs.exists != 'true' }}
+        if: ${{ env.SIGNING_CERT != '' }}
         env:
           CERT: ${{ secrets.WINDOWS_CERT_BASE64 }}
           CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
@@ -118,7 +128,6 @@ jobs:
           "$h  unreal_devtool.exe" | Set-Content -NoNewline -Encoding ascii unreal_devtool.exe.sha256
 
       - name: Publish GitHub release
-        if: ${{ steps.version.outputs.exists != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}

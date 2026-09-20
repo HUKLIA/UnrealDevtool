@@ -275,7 +275,7 @@ impl DevToolApp {
             let extra_err = crate::ops::package::parse_extra_uat_args(&self.extra_uat_args).err();
             egui::CollapsingHeader::new(egui::RichText::new("Advanced").font(body(12.0)).color(MUTED))
                 .id_salt("advanced_options")
-                .default_open(!self.extra_uat_args.trim().is_empty() || self.compress_pak || self.schedule.is_some())
+                .default_open(!self.extra_uat_args.trim().is_empty() || self.compress_pak || self.schedule.is_some() || self.size_budget_mb > 0)
                 .show(ui, |ui| {
                     let mut adv_changed = false;
                     ui.horizontal_wrapped(|ui| {
@@ -296,6 +296,21 @@ impl DevToolApp {
                     if let Some(e) = &extra_err {
                         ui.label(egui::RichText::new(e).font(body(11.5)).color(RED));
                     }
+
+                    // A size limit worth warning about: a store cap, or a
+                    // number the team agreed. The result screen flags a build
+                    // that goes over.
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(hint("Size budget (MB)"));
+                        if ui.add_sized([80.0, 26.0],
+                            egui::TextEdit::singleline(&mut self.size_budget_input).hint_text("none")).changed() {
+                            self.size_budget_mb = self.size_budget_input.trim().parse().unwrap_or(0);
+                            if let Some(p) = &self.project_path {
+                                crate::config::save_size_budget(p, self.size_budget_mb);
+                            }
+                        }
+                    });
 
                     // Start unattended at a time of day — the usual answer to
                     // a 30-minute build that should not compete with the
@@ -679,10 +694,18 @@ impl DevToolApp {
                             ui.set_min_width(ui.available_width());
                             ui.label(eyebrow(k));
                             ui.add_space(6.0);
-                            let c = if *k == "ERRORS" && out.errors > 0 { RED }
+                            let over_budget = *k == "SIZE" && self.size_budget_mb > 0
+                                && out.bytes > self.size_budget_mb as u64 * 1024 * 1024;
+                            let c = if over_budget { AMBER }
+                                    else if *k == "ERRORS" && out.errors > 0 { RED }
                                     else if *k == "WARNINGS" && out.warnings > 0 { AMBER }
                                     else { TEXT };
                             ui.label(numeral(v, 16.0, c));
+                            if over_budget {
+                                let over = out.bytes - self.size_budget_mb as u64 * 1024 * 1024;
+                                ui.label(egui::RichText::new(format!("{} over budget", crate::ops::history::format_bytes(over)))
+                                    .font(body(11.0)).color(AMBER));
+                            }
                         });
                     }
                 });
@@ -743,12 +766,24 @@ impl DevToolApp {
                     }
                 }
             }
+            if out.ok && self.git_project_dir().is_some()
+                && ui.add(quiet("Copy release notes"))
+                    .on_hover_text("The commits made since the previous build, ready to paste").clicked() {
+                let notes = self.release_notes(&out);
+                ui.ctx().copy_text(notes);
+                self.set_status("Release notes copied to the clipboard.".into());
+            }
             if ui.add(quiet("Copy report")).clicked() {
                 let report = self.build_report(&out);
                 ui.ctx().copy_text(report);
                 self.set_status("Build report copied to the clipboard.".into());
             }
         });
+
+        if out.ok && out.platform == crate::types::BuildTarget::Android {
+            ui.add_space(14.0);
+            self.show_android_install(ui, &out);
+        }
 
         if !out.ok {
             // Nothing to ship. Offering "upload" for a build that failed is how
@@ -845,6 +880,100 @@ impl DevToolApp {
         }
     }
 
+    /// Install the built APK on a connected phone, with adb.
+    fn show_android_install(&mut self, ui: &mut egui::Ui, out: &crate::types::BuildOutcome) {
+        use crate::ops::adb;
+        // Results from the background threads.
+        if let Some(r) = self.tools.adb_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.tools.adb_busy = false;
+            match r {
+                Ok(list) => self.tools.adb_devices = Some(list),
+                Err(e)   => { self.tools.adb_devices = Some(Vec::new()); self.tools.adb_note = Some(e); }
+            }
+        }
+        if let Some(msg) = self.tools.adb_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.tools.adb_busy = false;
+            self.tools.adb_note = Some(msg);
+        }
+
+        // Looked up once for this build: finding the APK walks its output.
+        let build_dir = out.zip.as_ref().and_then(|z| z.parent()).map(|p| p.to_path_buf()).unwrap_or_default();
+        if self.tools.adb_lookup.as_ref().is_none_or(|(d, _, _)| *d != build_dir) {
+            self.tools.adb_lookup = Some((build_dir.clone(), adb::find_adb(), adb::find_apk(&build_dir)));
+            self.tools.adb_devices = None;
+            self.tools.adb_note = None;
+        }
+        let (adb_path, apk) = self.tools.adb_lookup.as_ref().map(|(_, a, k)| (a.clone(), k.clone())).unwrap_or((None, None));
+        let ctx = ui.ctx().clone();
+
+        // Look for devices once when this screen first appears.
+        if let Some(path) = &adb_path && self.tools.adb_devices.is_none() && !self.tools.adb_busy {
+            self.tools.adb_busy = true;
+            let (path, out, ctx) = (path.clone(), self.tools.adb_pending.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(adb::devices(&path));
+                ctx.request_repaint();
+            });
+        }
+
+        let mut refresh = false;
+        let mut install: Option<String> = None;
+        section().inner_margin(egui::Margin::symmetric(24.0, 20.0)).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(eyebrow("INSTALL ON A PHONE"));
+            ui.add_space(10.0);
+            match (&adb_path, &apk) {
+                (None, _) => { ui.label(hint("adb was not found. It comes with the Android SDK's platform-tools — the SetupAndroid step installs it.")); }
+                (_, None) => { ui.label(hint("No .apk was found in this build's output.")); }
+                (Some(_), Some(apk)) => {
+                    ui.label(hint(&format!("{}  ({})", apk.file_name().unwrap_or_default().to_string_lossy(),
+                        crate::ops::history::format_bytes(std::fs::metadata(apk).map(|m| m.len()).unwrap_or(0)))));
+                    ui.add_space(8.0);
+                    let devices = self.tools.adb_devices.clone().unwrap_or_default();
+                    ui.horizontal_wrapped(|ui| {
+                        for d in &devices {
+                            let label = format!("Install on {}", d.label());
+                            let resp = ui.add_enabled(d.ready() && !self.tools.adb_busy, chip(&label, false));
+                            if !d.ready() {
+                                resp.on_disabled_hover_text(format!("{} — {}", d.serial,
+                                    if d.state == "unauthorized" { "accept the USB debugging prompt on the phone" } else { &d.state }));
+                            } else if resp.clicked() {
+                                install = Some(d.serial.clone());
+                            }
+                        }
+                        if ui.add_enabled(!self.tools.adb_busy, quiet("Refresh devices")).clicked() { refresh = true; }
+                    });
+                    if devices.is_empty() && !self.tools.adb_busy {
+                        ui.add_space(4.0);
+                        ui.label(hint("No device connected. Plug in a phone with USB debugging turned on."));
+                    }
+                    if self.tools.adb_busy {
+                        ui.add_space(4.0);
+                        ui.label(hint("Working…"));
+                    }
+                }
+            }
+            if let Some(n) = &self.tools.adb_note {
+                ui.add_space(6.0);
+                let bad = !n.starts_with("Installed");
+                ui.label(egui::RichText::new(n).font(body(12.0)).color(if bad { RED } else { GREEN }));
+            }
+        });
+
+        if refresh { self.tools.adb_devices = None; self.tools.adb_note = None; }
+        if let (Some(serial), Some(path), Some(apk)) = (install, adb_path, apk) {
+            self.tools.adb_busy = true;
+            self.tools.adb_note = None;
+            let res = self.tools.adb_result.clone();
+            std::thread::spawn(move || {
+                let msg = match adb::install(&path, &serial, &apk) { Ok(m) => m, Err(e) => e };
+                *res.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
+                ctx.request_repaint();
+            });
+        }
+        if self.tools.adb_busy { ui.ctx().request_repaint_after(std::time::Duration::from_millis(400)); }
+    }
+
     /// Why a build failed: the recognised cause with its fix when the log
     /// matches a known signature, and the first error lines UAT printed
     /// either way.
@@ -878,6 +1007,40 @@ impl DevToolApp {
                     });
                 }
             });
+    }
+
+    /// Release notes: the commits since the previous build that recorded one.
+    ///
+    /// The commit each build was made from is saved in its `build-info.txt`,
+    /// so "what changed" is just the git range between two builds — no notes
+    /// to write by hand. With no earlier record it lists the latest commits.
+    pub(crate) fn release_notes(&self, out: &crate::types::BuildOutcome) -> String {
+        let Some(dir) = self.git_project_dir() else { return String::new() };
+        let previous = self.builds.iter()
+            .filter(|b| b.version != out.version)
+            .find(|b| b.info.as_ref().is_some_and(|i| !i.commit.is_empty()));
+        let since = previous.and_then(|b| b.info.as_ref()).map(|i| i.commit.as_str());
+        let changes = crate::ops::git::changes_since(&dir, since, 15);
+
+        let mut n = format!("{} {} — {} {}
+", self.project_name(), out.version,
+            out.platform.label(), out.config.as_str());
+        match (previous, changes.is_empty()) {
+            (_, true) => n.push_str("
+No new commits since the previous build.
+"),
+            (Some(p), false) => n.push_str(&format!("
+Changes since {} ({}):
+", p.version, changes.len())),
+            (None, false) => n.push_str(&format!("
+Latest {} commits:
+", changes.len())),
+        }
+        for c in &changes {
+            n.push_str(&format!("- {c}
+"));
+        }
+        n
     }
 
     /// A plain-text report of a finished build, for a bug report or a message.

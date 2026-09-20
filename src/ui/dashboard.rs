@@ -64,8 +64,27 @@ impl DevToolApp {
                 ui.label(hint(&format!(
                     "Read from the project's config files, for a {} build.", self.build_target.label())));
                 ui.add_space(8.0);
+                let mut apply: Option<crate::ops::doctor::Fix> = None;
                 for item in &self.doctor_items {
                     Self::show_check_item(ui, item);
+                    if let Some(fix) = self.doctor_fixes.iter().find(|f| f.for_label == item.label) {
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            if ui.add(chip(&fix.button, false)).on_hover_text(&fix.what).clicked() {
+                                apply = Some(fix.clone());
+                            }
+                            ui.add(egui::Label::new(hint(&fix.what)).truncate());
+                        });
+                        ui.add_space(4.0);
+                    }
+                }
+                if let (Some(fix), Some(project)) = (apply, self.project_path.clone()) {
+                    match crate::ops::doctor::apply(&project, &fix.kind) {
+                        Ok(done) => self.set_status(format!("{done} A backup was kept next to the file.")),
+                        Err(e)   => self.set_status(format!("[ERROR] {e}")),
+                    }
+                    self.refresh_doctor();
+                    self.refresh_doctor_fixes();
                 }
             });
         }
