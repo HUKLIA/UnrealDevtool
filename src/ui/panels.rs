@@ -33,7 +33,7 @@ impl DevToolApp {
                 ui.horizontal_top(|ui| {
                     let thumb_max = 96.0;
                     egui::Frame::none()
-                        .fill(DEEP)
+                        .fill(surface_deep())
                         .stroke(egui::Stroke::new(1.0, accent()))
                         .rounding(egui::Rounding::same(6.0))
                         .inner_margin(egui::Margin::same(4.0))
@@ -108,6 +108,36 @@ impl DevToolApp {
                 ui.label(egui::RichText::new("Accent Color").size(11.0).color(egui::Color32::GRAY));
                 ui.add_space(4.0);
 
+                // A compact hue/value palette inspired by the supplied color
+                // wheel. One selection drives the shared accent and the
+                // surface tint functions in theme.rs, so the whole app moves
+                // together rather than changing a single button color.
+                let mut picked = None;
+                for row in 0..5 {
+                    ui.horizontal(|ui| {
+                        if row % 2 == 1 { ui.add_space(14.0); }
+                        for col in 0..12 {
+                            let color = crate::theme::theme_swatch(col, row);
+                            let selected = accent() == color;
+                            let button = egui::Button::new(if selected { "●" } else { "" })
+                                .fill(color)
+                                .min_size(egui::vec2(24.0, 22.0))
+                                .rounding(egui::Rounding::same(7.0));
+                            if ui.add(button).on_hover_text("Use this as the main theme color").clicked() {
+                                picked = Some(color);
+                            }
+                        }
+                    });
+                }
+                if let Some(color) = picked {
+                    crate::theme::set_accent(ui.ctx(), color);
+                    save_ui_config(&UiConfig {
+                        accent_rgb: Some((color.r(), color.g(), color.b())),
+                        theme_mode: Some(if is_light_mode() { "light".into() } else { "dark".into() }),
+                    });
+                }
+                ui.add_space(6.0);
+
                 const PRESETS: &[(&str, egui::Color32)] = &[
                     ("Miku Teal",    egui::Color32::from_rgb(0, 173, 181)),
                     ("Sakura Pink",  egui::Color32::from_rgb(236, 72, 153)),
@@ -123,9 +153,39 @@ impl DevToolApp {
                             .min_size(egui::vec2(26.0, 22.0));
                         if ui.add(btn).on_hover_text(*name).clicked() {
                             crate::theme::set_accent(ui.ctx(), *color);
-                            save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())) });
+                            save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())), theme_mode: Some(if is_light_mode() { "light".into() } else { "dark".into() }) });
                         }
                     }
+                });
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.label(eyebrow("APP APPEARANCE"));
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (preset, label) in [
+                        (ThemePreset::Miku, "Miku dark"),
+                        (ThemePreset::Sakura, "Sakura light"),
+                        (ThemePreset::Aurora, "Aurora dark"),
+                        (ThemePreset::Mono, "Mono light"),
+                    ] {
+                        if ui.add(chip(label, false)).clicked() {
+                            set_theme_preset(ui.ctx(), preset);
+                            let c = accent();
+                            save_ui_config(&UiConfig { accent_rgb: Some((c.r(), c.g(), c.b())), theme_mode: Some(if is_light_mode() { "light".into() } else { "dark".into() }) });
+                        }
+                    }
+                });
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    let label = if is_light_mode() { "Light mode" } else { "Dark mode" };
+                    if ui.add(chip(label, true)).clicked() {
+                        set_light_mode(!is_light_mode());
+                        apply_theme(ui.ctx());
+                        let c = accent();
+                        save_ui_config(&UiConfig { accent_rgb: Some((c.r(), c.g(), c.b())), theme_mode: Some(if is_light_mode() { "light".into() } else { "dark".into() }) });
+                    }
+                    ui.label(hint("Presets change the accent and surface contrast across the app."));
                 });
                 ui.add_space(6.0);
 
@@ -133,12 +193,12 @@ impl DevToolApp {
                     let mut color = accent();
                     if ui.color_edit_button_srgba(&mut color).changed() {
                         crate::theme::set_accent(ui.ctx(), color);
-                        save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())) });
+                        save_ui_config(&UiConfig { accent_rgb: Some((color.r(), color.g(), color.b())), theme_mode: Some(if is_light_mode() { "light".into() } else { "dark".into() }) });
                     }
                     ui.add_space(8.0);
                     if ui.add_sized([160.0, 24.0], egui::Button::new("Reset to default teal")).clicked() {
                         crate::theme::set_accent(ui.ctx(), crate::theme::default_accent());
-                        save_ui_config(&UiConfig { accent_rgb: None });
+                        save_ui_config(&UiConfig { accent_rgb: None, theme_mode: Some(if is_light_mode() { "light".into() } else { "dark".into() }) });
                     }
                 });
                 // No trailing "< Back" here — the Extras left sidebar is

@@ -17,7 +17,7 @@ use crate::engine::{build_init_status, detect_unreal_engine, is_valid_engine_dir
 use crate::gif::GifPlayer;
 use crate::ops::{git as ops_git, package as ops_package, update as ops_update, vs as ops_vs};
 use crate::ops::update::UpdateInfo;
-use crate::theme::{apply_theme, install_fonts};
+use crate::theme::{apply_theme, install_fonts, set_light_mode};
 use crate::types::{BuildConfiguration, BuildOutcome, BuildTarget, ExtrasTab, GitState, GitTaskStatus,
                    IdeChoice, RunState, Sheet};
 use crate::webview::{WebPanel, WebViewManager};
@@ -341,6 +341,7 @@ impl DevToolApp {
         if let Some((r, g, b)) = ui_cfg.accent_rgb {
             crate::theme::set_accent_value(egui::Color32::from_rgb(r, g, b));
         }
+        set_light_mode(matches!(ui_cfg.theme_mode.as_deref(), Some("light")));
         install_fonts(&cc.egui_ctx);
         apply_theme(&cc.egui_ctx);
         let project_path    = load_project_path();

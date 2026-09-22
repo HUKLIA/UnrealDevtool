@@ -104,6 +104,25 @@ pub fn ease_out(t: f32) -> f32 {
 /// app derives from this rather than hard-coding a second copy of the colour,
 /// so a colour picked at runtime propagates everywhere at once.
 static ACCENT: Mutex<egui::Color32> = Mutex::new(MIKU_TEAL_DEFAULT);
+static LIGHT_MODE: Mutex<bool> = Mutex::new(false);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ThemePreset { Miku, Sakura, Aurora, Mono }
+
+pub fn is_light_mode() -> bool { *LIGHT_MODE.lock().unwrap_or_else(|e| e.into_inner()) }
+pub fn set_light_mode(light: bool) { *LIGHT_MODE.lock().unwrap_or_else(|e| e.into_inner()) = light; }
+
+pub fn set_theme_preset(ctx: &egui::Context, preset: ThemePreset) {
+    let (color, light) = match preset {
+        ThemePreset::Miku => (egui::Color32::from_rgb(57, 197, 187), false),
+        ThemePreset::Sakura => (egui::Color32::from_rgb(236, 72, 153), true),
+        ThemePreset::Aurora => (egui::Color32::from_rgb(129, 140, 248), false),
+        ThemePreset::Mono => (egui::Color32::from_rgb(148, 163, 184), true),
+    };
+    set_accent_value(color);
+    set_light_mode(light);
+    apply_theme(ctx);
+}
 
 pub fn accent() -> egui::Color32 {
     *ACCENT.lock().unwrap_or_else(|e| e.into_inner())
@@ -128,6 +147,47 @@ pub fn mix(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     let t = t.clamp(0.0, 1.0);
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     egui::Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
+pub fn background() -> egui::Color32 {
+    if is_light_mode() { mix(egui::Color32::from_rgb(248, 250, 252), accent(), 0.055) }
+    else { mix(BG, accent(), 0.10) }
+}
+pub fn topbar_background() -> egui::Color32 {
+    if is_light_mode() { mix(egui::Color32::from_rgb(226, 232, 240), accent(), 0.10) }
+    else { mix(BG_TOP, accent(), 0.16) }
+}
+pub fn surface_card() -> egui::Color32 {
+    if is_light_mode() { mix(egui::Color32::from_rgb(248, 250, 252), accent(), 0.09) }
+    else { mix(CARD, accent(), 0.14) }
+}
+pub fn surface_well() -> egui::Color32 {
+    if is_light_mode() { mix(egui::Color32::from_rgb(241, 245, 249), accent(), 0.12) }
+    else { mix(WELL, accent(), 0.17) }
+}
+pub fn surface_deep() -> egui::Color32 {
+    if is_light_mode() { mix(egui::Color32::from_rgb(226, 232, 240), accent(), 0.10) }
+    else { mix(DEEP, accent(), 0.11) }
+}
+pub fn surface_line() -> egui::Color32 { mix(if is_light_mode() { egui::Color32::from_rgb(203, 213, 225) } else { LINE }, accent(), 0.24) }
+pub fn surface_line_soft() -> egui::Color32 { mix(if is_light_mode() { egui::Color32::from_rgb(226, 232, 240) } else { LINE_SOFT }, accent(), 0.16) }
+
+/// A compact HSV palette for the main theme control. The selected swatch is
+/// applied as the accent, then all shared surfaces derive a subtle tint from it.
+pub fn theme_swatch(hue: usize, value: usize) -> egui::Color32 {
+    const HUES: [f32; 12] = [0.00, 0.08, 0.16, 0.25, 0.33, 0.42, 0.50, 0.58, 0.66, 0.75, 0.84, 0.92];
+    const VALUES: [f32; 5] = [0.38, 0.52, 0.68, 0.82, 0.96];
+    hsv_to_rgb(HUES[hue % HUES.len()], 0.86, VALUES[value % VALUES.len()])
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> egui::Color32 {
+    let i = (h * 6.0).floor() as i32;
+    let f = h * 6.0 - i as f32;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+    let (r, g, b) = match i.rem_euclid(6) { 0 => (v,t,p), 1 => (q,v,p), 2 => (p,v,t), 3 => (p,q,v), 4 => (t,p,v), _ => (v,p,q) };
+    egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
 /// Sets the accent without re-applying `Visuals`. Used at startup to seed the
@@ -219,8 +279,8 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// The primary container: a titled region of the page.
 pub fn section() -> egui::Frame {
     egui::Frame::none()
-        .fill(CARD)
-        .stroke(egui::Stroke::new(1.0, LINE))
+        .fill(surface_card())
+        .stroke(egui::Stroke::new(1.0, surface_line()))
         .rounding(egui::Rounding::same(R_SECTION))
         .inner_margin(egui::Margin::symmetric(26.0, 24.0))
 }
@@ -228,8 +288,8 @@ pub fn section() -> egui::Frame {
 /// A smaller card, used in the rail.
 pub fn card() -> egui::Frame {
     egui::Frame::none()
-        .fill(CARD)
-        .stroke(egui::Stroke::new(1.0, LINE))
+        .fill(surface_card())
+        .stroke(egui::Stroke::new(1.0, surface_line()))
         .rounding(egui::Rounding::same(R_CARD))
         .inner_margin(egui::Margin::symmetric(17.0, 16.0))
 }
@@ -237,8 +297,8 @@ pub fn card() -> egui::Frame {
 /// Inset well: an input, a stat tile, a nested block.
 pub fn well() -> egui::Frame {
     egui::Frame::none()
-        .fill(WELL)
-        .stroke(egui::Stroke::new(1.0, LINE))
+        .fill(surface_well())
+        .stroke(egui::Stroke::new(1.0, surface_line()))
         .rounding(egui::Rounding::same(12.0))
         .inner_margin(egui::Margin::symmetric(15.0, 13.0))
 }
@@ -246,8 +306,8 @@ pub fn well() -> egui::Frame {
 /// Log / media surface — darker than the ground it sits on.
 pub fn deep() -> egui::Frame {
     egui::Frame::none()
-        .fill(DEEP)
-        .stroke(egui::Stroke::new(1.0, LINE_SOFT))
+        .fill(surface_deep())
+        .stroke(egui::Stroke::new(1.0, surface_line_soft()))
         .rounding(egui::Rounding::same(R_CARD))
         .inner_margin(egui::Margin::symmetric(16.0, 12.0))
 }
@@ -266,12 +326,12 @@ pub fn callout(color: egui::Color32) -> egui::Frame {
 /// The small letterspaced label above every section. Cloned from the canvas:
 /// 10.5px, muted, and always upper case at the call site.
 pub fn eyebrow(text: &str) -> egui::RichText {
-    egui::RichText::new(text).font(body(10.5)).color(MUTED)
+    egui::RichText::new(text).font(body(10.5)).color(text_muted())
 }
 
 /// Page / section heading.
 pub fn heading(text: &str, size: f32) -> egui::RichText {
-    egui::RichText::new(text).font(display(size)).color(TEXT)
+    egui::RichText::new(text).font(display(size)).color(text_primary())
 }
 
 /// A number meant to be read as a number — version, size, duration.
@@ -280,8 +340,12 @@ pub fn numeral(text: &str, size: f32, color: egui::Color32) -> egui::RichText {
 }
 
 pub fn hint(text: &str) -> egui::RichText {
-    egui::RichText::new(text).font(body(11.5)).color(MUTED)
+    egui::RichText::new(text).font(body(11.5)).color(text_muted())
 }
+
+pub fn text_primary() -> egui::Color32 { if is_light_mode() { egui::Color32::from_rgb(15, 23, 42) } else { TEXT } }
+pub fn text_soft() -> egui::Color32 { if is_light_mode() { egui::Color32::from_rgb(51, 65, 85) } else { SOFT } }
+pub fn text_muted() -> egui::Color32 { if is_light_mode() { egui::Color32::from_rgb(71, 85, 105) } else { MUTED } }
 
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
@@ -295,7 +359,7 @@ pub fn dot(ui: &mut egui::Ui, color: egui::Color32, size: f32) {
 
 /// The single primary action on a screen.
 pub fn primary(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).font(body(14.0)).color(egui::Color32::from_rgb(214, 251, 247)))
+    egui::Button::new(egui::RichText::new(text).font(body(14.0)).color(text_primary()))
         .fill(acc(34))
         .stroke(egui::Stroke::new(1.0, acc(115)))
         .rounding(egui::Rounding::same(13.0))
@@ -303,17 +367,17 @@ pub fn primary(text: &str) -> egui::Button<'static> {
 
 /// Everything else. Same geometry as `primary` so mixed rows align.
 pub fn ghost(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(SOFT))
-        .fill(WELL)
-        .stroke(egui::Stroke::new(1.0, LINE))
+    egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(text_soft()))
+        .fill(surface_well())
+        .stroke(egui::Stroke::new(1.0, surface_line()))
         .rounding(egui::Rounding::same(R_CTL))
 }
 
 /// Quieter still: no fill, for a tertiary action inside a card.
 pub fn quiet(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).font(body(12.0)).color(MUTED))
+    egui::Button::new(egui::RichText::new(text).font(body(12.0)).color(text_muted()))
         .fill(egui::Color32::TRANSPARENT)
-        .stroke(egui::Stroke::new(1.0, LINE))
+        .stroke(egui::Stroke::new(1.0, surface_line()))
         .rounding(egui::Rounding::same(R_CTL))
 }
 
@@ -328,14 +392,14 @@ pub fn danger(text: &str) -> egui::Button<'static> {
 /// A chip that can be pressed — the config selectors on the run surface.
 pub fn chip(text: &str, active: bool) -> egui::Button<'static> {
     if active {
-        egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(egui::Color32::from_rgb(191, 239, 234)))
+        egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(text_primary()))
             .fill(acc(26))
             .stroke(egui::Stroke::new(1.0, acc(77)))
             .rounding(egui::Rounding::same(R_PILL))
     } else {
-        egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(SOFT))
-            .fill(WELL)
-            .stroke(egui::Stroke::new(1.0, LINE))
+        egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(text_soft()))
+            .fill(surface_well())
+            .stroke(egui::Stroke::new(1.0, surface_line()))
             .rounding(egui::Rounding::same(R_PILL))
     }
 }
@@ -590,22 +654,25 @@ pub fn icon_ghost(ui: &mut egui::Ui, kind: Icon, size: egui::Vec2) -> egui::Resp
 
 
 pub fn apply_theme(ctx: &egui::Context) {
-    let mut v = egui::Visuals::dark();
-    v.window_fill         = BG;
-    v.panel_fill          = BG;
-    v.extreme_bg_color    = WELL;
-    v.override_text_color = Some(TEXT);
+    let light = is_light_mode();
+    let mut v = if light { egui::Visuals::light() } else { egui::Visuals::dark() };
+    let bg = if light { egui::Color32::from_rgb(241, 245, 249) } else { BG };
+    let text = if light { egui::Color32::from_rgb(15, 23, 42) } else { TEXT };
+    v.window_fill         = surface_card();
+    v.panel_fill          = bg;
+    v.extreme_bg_color    = surface_well();
+    v.override_text_color = Some(text);
 
     let r = egui::Rounding::same(R_CTL);
-    v.widgets.noninteractive.bg_fill   = CARD;
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, LINE);
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, MUTED);
+    v.widgets.noninteractive.bg_fill   = surface_card();
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, surface_line());
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, if light { egui::Color32::from_rgb(71,85,105) } else { MUTED });
     v.widgets.noninteractive.rounding  = r;
 
-    v.widgets.inactive.bg_fill      = WELL;
-    v.widgets.inactive.weak_bg_fill = WELL;
-    v.widgets.inactive.fg_stroke    = egui::Stroke::new(1.0, SOFT);
-    v.widgets.inactive.bg_stroke    = egui::Stroke::new(1.0, LINE);
+    v.widgets.inactive.bg_fill      = surface_well();
+    v.widgets.inactive.weak_bg_fill = surface_well();
+    v.widgets.inactive.fg_stroke    = egui::Stroke::new(1.0, if light { egui::Color32::from_rgb(51,65,85) } else { SOFT });
+    v.widgets.inactive.bg_stroke    = egui::Stroke::new(1.0, surface_line());
     v.widgets.inactive.rounding     = r;
 
     // Hover tints with the accent hue instead of swapping to a solid fill,
@@ -622,7 +689,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     v.widgets.active.bg_stroke    = egui::Stroke::new(1.0, accent());
     v.widgets.active.rounding     = r;
 
-    v.widgets.open.bg_fill   = WELL;
+    v.widgets.open.bg_fill   = surface_well();
     v.widgets.open.bg_stroke = egui::Stroke::new(1.0, acc(90));
     v.widgets.open.rounding  = r;
 
@@ -631,7 +698,7 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     v.window_stroke   = egui::Stroke::new(1.0, LINE);
     v.window_rounding = egui::Rounding::same(R_CARD);
-    v.window_fill     = CARD;
+    v.window_fill     = surface_card();
     v.popup_shadow = egui::epaint::Shadow {
         offset: egui::vec2(0.0, 10.0),
         blur:   30.0,

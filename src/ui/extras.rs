@@ -56,7 +56,7 @@ impl DevToolApp {
                 // instead of just leaving it blank.
                 let gif_size = ui.available_width().clamp(180.0, 420.0);
                 well()
-                    .fill(DEEP)
+                    .fill(surface_deep())
                     .stroke(egui::Stroke::new(1.0, acc(90)))
                     .show(ui, |ui| {
                         if let Some(gif) = &self.gif_player {

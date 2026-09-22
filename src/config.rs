@@ -298,6 +298,7 @@ pub fn save_media_config(cfg: &MediaConfig) {
 #[derive(Default)]
 pub struct UiConfig {
     pub accent_rgb: Option<(u8, u8, u8)>,
+    pub theme_mode: Option<String>,
 }
 
 pub fn load_ui_config() -> UiConfig {
@@ -307,14 +308,16 @@ pub fn load_ui_config() -> UiConfig {
         let mut p = line.split(',');
         Some((p.next()?.trim().parse().ok()?, p.next()?.trim().parse().ok()?, p.next()?.trim().parse().ok()?))
     });
-    UiConfig { accent_rgb }
+    let theme_mode = content.lines().nth(1).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+    UiConfig { accent_rgb, theme_mode }
 }
 
 pub fn save_ui_config(cfg: &UiConfig) {
     if let Some(dir) = config_dir() {
         let _ = fs::create_dir_all(&dir);
         let line = cfg.accent_rgb.map(|(r, g, b)| format!("{r},{g},{b}")).unwrap_or_default();
-        let _ = fs::write(dir.join("ui.cfg"), line);
+        let mode = cfg.theme_mode.as_deref().unwrap_or("dark");
+        let _ = fs::write(dir.join("ui.cfg"), format!("{line}\n{mode}"));
     }
 }
 

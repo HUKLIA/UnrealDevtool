@@ -35,7 +35,7 @@ impl DevToolApp {
     /// or a sheet (the icons), and the build surface gets the whole window.
     pub fn show_topbar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
-        ui.painter().rect_filled(rect, egui::Rounding::ZERO, BG_TOP);
+        ui.painter().rect_filled(rect, egui::Rounding::ZERO, topbar_background());
         ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, LINE));
 
         let (left_rect, right_rect) = topbar_rects(rect);
@@ -52,7 +52,7 @@ impl DevToolApp {
             ui.painter().rect_filled(mark, egui::Rounding::same(8.0), acc(40));
             paint_icon(ui.painter(), mark.center(), Icon::Note, accent());
             ui.add_space(3.0);
-            ui.label(egui::RichText::new("UNREAL DEVTOOL").font(body(11.5)).color(TEXT));
+            ui.label(egui::RichText::new("UNREAL DEVTOOL").font(body(11.5)).color(text_primary()));
 
             ui.add_space(8.0);
             let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 18.0), egui::Sense::hover());
@@ -76,14 +76,14 @@ impl DevToolApp {
             // scattered across the bar with gaps between them. `Label::truncate`
             // takes only the space it needs and shortens when crowded.
             ui.add(egui::Label::new(
-                egui::RichText::new(name).font(body(13.0)).color(TEXT)).truncate());
+                egui::RichText::new(name).font(body(13.0)).color(text_primary())).truncate());
 
             if !compact && let Some(engine) = &self.engine_dir {
                 let v = engine.file_name().map(|n| n.to_string_lossy().replace('_', " "))
                     .unwrap_or_else(|| "engine".into());
                 ui.add_space(8.0);
                 ui.add(egui::Label::new(
-                    egui::RichText::new(v).font(body(12.0)).color(MUTED)).truncate());
+                    egui::RichText::new(v).font(body(12.0)).color(text_muted())).truncate());
             }
 
             if !compact && !self.git_current_branch.is_empty() && self.git_project_dir().is_some() && ui.available_width() >= 110.0 {
@@ -236,8 +236,8 @@ impl DevToolApp {
         area_ui.multiply_opacity(t);
 
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(10, 20, 30))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(35, 57, 76)))
+            .fill(surface_card())
+            .stroke(egui::Stroke::new(1.0, surface_line()))
             .rounding(egui::Rounding::same(20.0))
             .inner_margin(egui::Margin::ZERO)
             .show(&mut area_ui, |ui| {

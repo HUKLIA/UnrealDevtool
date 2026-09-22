@@ -33,7 +33,7 @@ impl eframe::App for DevToolApp {
 
         if self.show_intro {
             egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(BG))
+                .frame(egui::Frame::none().fill(background()))
                 .show(ctx, |ui| self.show_intro_screen(ui, ctx));
             return;
         }
@@ -64,7 +64,7 @@ impl eframe::App for DevToolApp {
             .exact_height(28.0)
             // Side padding matches the surface gutter; the status dot used to
             // sit on the window edge with half of it clipped.
-            .frame(egui::Frame::none().fill(BG_TOP)
+            .frame(egui::Frame::none().fill(topbar_background())
                 .inner_margin(egui::Margin::symmetric(GUTTER, 0.0)))
             .show(ctx, |ui| {
                 ui.add_space(4.0);
@@ -77,7 +77,7 @@ impl eframe::App for DevToolApp {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none()
-                .fill(BG)
+                .fill(background())
                 // No bottom margin: scrolling regions carry their own trailing
                 // gap, so content runs off the bottom edge rather than being
                 // cut off above an empty strip.
