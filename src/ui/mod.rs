@@ -29,12 +29,14 @@ const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 
 impl eframe::App for DevToolApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_log_import();
         self.center_window_on_startup(ctx);
 
         if self.show_intro {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(background()))
                 .show(ctx, |ui| self.show_intro_screen(ui, ctx));
+            self.show_close_choice(ctx);
             return;
         }
 
@@ -156,6 +158,9 @@ impl eframe::App for DevToolApp {
                     self.show_guide_overlay(ui, ctx);
                 });
         }
+
+        self.show_close_choice(ctx);
+        if self.close_prompt { self.pending_webview = None; }
 
         // Sync the embedded WebView2 control to whatever asked for space.
         let ppp = ctx.pixels_per_point();
@@ -629,6 +634,9 @@ impl DevToolApp {
                                 self.show_update_banner = false;
                             }
                         }
+                        if ui.button("Download in browser").on_hover_text("Free manual update: download the release, close the app, verify its checksum and replace the old file.").clicked() {
+                            crate::ops::open_url("https://github.com/HUKLIA/UnrealDevtool/releases/latest");
+                        }
                         // Two-step, because this is irreversible: one click
                         // downloads a release and replaces the running
                         // executable with it, with no undo. Mis-clicking it
@@ -719,5 +727,55 @@ fn paint_ambient(ui: &egui::Ui) {
     for i in 0..4 {
         let radius = 220.0 + i as f32 * 120.0;
         ui.painter().circle_filled(c, radius, acc(1));
+    }
+}
+
+impl DevToolApp {
+    fn show_close_choice(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_confirmed {
+            use crate::window::{close_action, CloseAction};
+            match close_action(self.close_behavior, self.run_state() == RunState::Running) {
+                CloseAction::Close => { self.close_confirmed = true; }
+                CloseAction::Minimize => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+                CloseAction::Prompt => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    self.remember_close = false;
+                    self.close_prompt = true;
+                }
+            }
+        }
+        if !self.close_prompt { return; }
+        egui::Area::new(egui::Id::new("close_backdrop"))
+            .order(egui::Order::Tooltip).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
+                let rect = ctx.screen_rect();
+                ui.allocate_rect(rect, egui::Sense::click());
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(140));
+            });
+        egui::Window::new("Close or minimize?").collapsible(false).resizable(false)
+            .order(egui::Order::Tooltip)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).show(ctx, |ui| {
+                ui.label("Minimize keeps background tasks running in the taskbar.");
+                if self.run_state() == RunState::Running {
+                    ui.colored_label(AMBER, "A task is running. Closing may interrupt it; child tools may keep running.");
+                }
+                ui.checkbox(&mut self.remember_close, "Remember my choice (change in Settings)");
+                ui.horizontal(|ui| {
+                    if ui.button("Minimize").clicked() {
+                        if self.remember_close { self.set_close_behavior(crate::config::CloseBehavior::Minimize); }
+                        self.close_prompt = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    if ui.button("Close app").clicked() {
+                        if self.remember_close { self.set_close_behavior(crate::config::CloseBehavior::Close); }
+                        self.close_confirmed = true;
+                        self.close_prompt = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("Cancel").clicked() { self.close_prompt = false; }
+                });
+            });
     }
 }

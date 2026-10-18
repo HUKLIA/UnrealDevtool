@@ -76,6 +76,10 @@ impl DevToolApp {
             slot
         });
 
+        if ui.button("Report detection to Microsoft (free)").clicked() {
+            crate::ops::open_url("https://www.microsoft.com/en-us/wdsi/filesubmission");
+        }
+        ui.label(hint("Checksums verify identity, not safety. SmartScreen reputation warnings differ from malware detections."));
         ui.label(eyebrow("THIS FILE"));
         ui.add_space(4.0);
         let state = slot.lock().unwrap_or_else(|e| e.into_inner()).clone();

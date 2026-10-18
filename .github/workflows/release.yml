@@ -40,6 +40,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Test
+        run: cargo test --locked
+
       # Every push to main is a new release, numbered automatically.
       #
       # Cargo.toml holds the series (MAJOR.MINOR, e.g. 1.0). The patch number is
@@ -100,11 +103,8 @@ jobs:
           echo "sha=$h" >> $env:GITHUB_OUTPUT
           echo "SHA-256: $h"
 
-      # Authenticode signing. An unsigned binary is the root cause of the
-      # SmartScreen warnings and antivirus false positives this app hits —
-      # everything else (version resource, manifest, dropping the embedded
-      # rclone payload) lowers the score, but only a signature actually
-      # establishes a publisher identity.
+      # Optional Authenticode signing establishes publisher identity; it does
+      # not guarantee SmartScreen reputation or antivirus acceptance.
       #
       # This step is skipped unless the secrets exist, so the workflow keeps
       # working for anyone without a certificate. To enable it: base64-encode
@@ -127,6 +127,14 @@ jobs:
           $h = (Get-FileHash unreal_devtool.exe -Algorithm SHA256).Hash.ToLower()
           "$h  unreal_devtool.exe" | Set-Content -NoNewline -Encoding ascii unreal_devtool.exe.sha256
 
+      - name: Record final artifact hash
+        id: final_hash
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash unreal_devtool.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  unreal_devtool.exe" | Set-Content -NoNewline -Encoding ascii unreal_devtool.exe.sha256
+          echo "sha=$h" >> $env:GITHUB_OUTPUT
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -135,7 +143,7 @@ jobs:
           body: |
             Automated build from commit ${{ github.sha }} on `main`.
 
-            SHA-256 (`unreal_devtool.exe`): `${{ steps.hash.outputs.sha }}`
+            SHA-256 (`unreal_devtool.exe`): `${{ steps.final_hash.outputs.sha }}`
 
             Verify your download before running it:
             ```powershell

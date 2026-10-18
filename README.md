@@ -103,7 +103,7 @@ Honest list of what is not perfect:
 - **Windows only.** Mac builds cannot be made from Windows (that is an Unreal limit), so that button is greyed out.
 - **Android and Linux need their tools installed first** (Android SDK/NDK, or the Linux cross-compile toolchain). The app tells you when they are missing but does not install them.
 - **Tested mostly on Windows builds.** The "compile first" and "re-use last cook" methods were run for real on one Unreal 5.7 project. Installing to an Android phone, and the "fix up redirectors" / "resave all packages" tools, have not been tried on real devices or big projects.
-- **Windows or your antivirus may warn about it.** The app is not code-signed yet (see below). It is a false alarm, but it can still show a warning.
+- **Windows or your antivirus may warn about it.** The app is not code-signed yet (see below). A warning needs investigation; being unsigned does not prove a detection is a false positive.
 - **Some tools change your files** (plugins, engine version, default map, `.gitignore`). They always ask first and keep a `.devtool-backup` copy, but commit your work before using them.
 - **rclone is not included.** For Google Drive upload you install rclone yourself; the app has a button that opens the download page.
 
@@ -164,3 +164,19 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - **Loading animation** — [Ievan Polkka's Hachune Miku Vector (animated)](https://www.deviantart.com/duckne55/art/Ievan-Polkka-s-Hachune-Miku-Vector-animated-451345694) by [duckne55](https://www.deviantart.com/duckne55) on DeviantArt. All rights belong to the original artist.
 - **Packaging music** — "Ievan Polkka" from *Hatsune Miku: Project DIVA F Complete Collection*, sourced from [Khinsider](https://downloads.khinsider.com/game-soundtracks/album/hatsune-miku-project-diva-f-complete-collection/2-21.%2520Ievan%2520Polkka.mp3). All rights belong to the original copyright holders.
 - **Fonts** — Space Grotesk and JetBrains Mono, both under the SIL Open Font License (see `Fonts/`).
+
+## Debugging, minimizing and free detection review
+
+Closing the window offers **Minimize**, **Close app**, or **Cancel**. Minimize keeps tasks running and leaves the app in the Windows taskbar. Closing during work warns that tools may be interrupted or remain running. **Remember my choice** saves the action; change it under **Settings > Window behavior**. A saved Close action still asks before exiting during active work.
+
+The pasted-log scanner imports `.log` and `.txt` files up to 8 MiB in the background, including UTF-8 and BOM-marked UTF-16. It recognizes 18 failure patterns without case sensitivity, orders matches by line number, and shows surrounding context. Copy or save a report with suggested next steps; known project, engine and user paths are redacted by default. Review it before sharing because credentials and other secrets are not automatically removed. App panics include a backtrace in `%APPDATA%\UnrealDevTool\crash.log`; release backtraces can have limited symbol detail.
+
+Use **Download in browser** on the update banner for a manual update without self-replacement. Automatic updates now require a published checksum and restore the original executable pathname if installation or process launch fails. This cannot detect a replacement that launches and later crashes. Neither method guarantees Defender acceptance.
+
+For a detected threat, record its exact name in Windows Security protection history, verify the release hash, and use **Extras > App Self-Check > Report detection to Microsoft (free)**. Microsoft's [developer FAQ](https://learn.microsoft.com/en-us/defender-xdr/developer-faq) explains submission for review. A checksum proves file identity, not safety. An unsigned-app [SmartScreen reputation warning](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) is a separate issue; there is no guaranteed free reputation reset. Keep Defender enabled while the exact detection is investigated.
+
+See [100 improvement candidates](docs/IMPROVEMENTS-100.md) for the prioritized feature, tool and skill backlog.
+
+Free signing eligibility and detection-review details: [Windows trust options](docs/WINDOWS-TRUST.md).
+
+Implementation and test evidence: [feature verification](docs/FEATURE-VERIFICATION.md).

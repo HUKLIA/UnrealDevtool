@@ -11,6 +11,7 @@ mod theme;
 mod types;
 mod ui;
 mod webview;
+mod window;
 
 use eframe::egui;
 
@@ -27,9 +28,10 @@ fn install_crash_log() {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let entry = format!(
-                "[unix {when}] v{} — {info}
+                "[unix {when}] v{} — {info}\nBacktrace: {}
 ",
                 env!("CARGO_PKG_VERSION"),
+                std::backtrace::Backtrace::force_capture(),
             );
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new()

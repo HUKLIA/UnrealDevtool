@@ -365,3 +365,25 @@ pub fn save_custom_links(links: &[CustomLink]) {
         }
     }
 }
+
+/// Closing preferences are kept separate from visual settings so changing the
+/// accent cannot reset how the window closes.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CloseBehavior {
+    #[default]
+    Ask,
+    Minimize,
+    Close,
+}
+
+pub fn load_close_behavior() -> CloseBehavior {
+    config_dir().and_then(|d| fs::read_to_string(d.join("window.json")).ok())
+        .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+pub fn save_close_behavior(value: CloseBehavior) -> Result<(), String> {
+    let dir = config_dir().ok_or("Settings directory unavailable")?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join("window.json"), serde_json::to_string(&value).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}

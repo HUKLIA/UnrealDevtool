@@ -162,6 +162,9 @@ pub fn download_and_install(
     cancel:       &Arc<AtomicBool>,
     progress:     &Arc<Mutex<f32>>,
 ) -> Result<(), String> {
+    if checksum_url.is_none() {
+        return Err("Release has no checksum. Automatic update refused; use the release page to review a manual download.".into());
+    }
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = current_exe.parent().ok_or("could not resolve install directory")?;
 
@@ -222,9 +225,7 @@ pub fn download_and_install(
     // README tell a wary user (or their IT department) how to independently
     // confirm that what they are running matches the published release.
     //
-    // `checksum_url` is `None` for releases published before the workflow
-    // started emitting the sidecar; those still install, since refusing them
-    // would strand anyone on an older build with no way forward.
+    // Releases without a checksum are refused before download.
     if let Some(url) = checksum_url {
         *status.lock().unwrap_or_else(|e| e.into_inner()) = "Verifying download…".into();
         let expected = fetch_expected_digest(url)?;
@@ -239,19 +240,10 @@ pub fn download_and_install(
     }
 
     *status.lock().unwrap_or_else(|e| e.into_inner()) = "Installing update…".into();
-    let _ = std::fs::remove_file(&old_path);
-    // Every step below touches a file that antivirus may have just grabbed
-    // for scanning (the exe we're renaming aside, or the one we just
-    // finished writing) — retry_file_op rides out that transient lock
-    // instead of failing on the first sharing violation.
-    retry_file_op(|| std::fs::rename(&current_exe, &old_path))
-        .map_err(|e| format!("could not replace running exe: {e}"))?;
-    retry_file_op(|| std::fs::rename(&new_path, &current_exe))
-        .map_err(|e| e.to_string())?;
+    install_with_rollback(&current_exe, &new_path, &old_path, |exe| {
+        retry_file_op(|| std::process::Command::new(exe).spawn()).map(|_| ())
+    })
 
-    retry_file_op(|| std::process::Command::new(&current_exe).spawn())
-        .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// Deletes a leftover `unreal_devtool_old.exe` from a previous update, if
@@ -306,5 +298,96 @@ mod version_tests {
         assert!(v("v1.1.0") > v("v1.0.99"));
         assert!(v("v0.0.66") > v("v0.0.65"), "old-style tags still order");
         assert!(!(v("1.0.1") > v("v1.0.1")), "a build is not newer than itself");
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    #[test]
+    fn missing_checksum_is_refused_before_network_or_file_changes() {
+        let status = Arc::new(Mutex::new(String::from("unchanged")));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(Mutex::new(0.0));
+        let result = download_and_install("invalid-url", None, &status, &cancel, &progress);
+        assert!(result.unwrap_err().contains("no checksum"));
+        assert_eq!(*status.lock().unwrap(), "unchanged");
+    }
+}
+
+/// Restore the original pathname on installation or launch failure. The
+/// downloaded artifact is retained at the staging path for inspection.
+fn install_with_rollback(
+    current: &std::path::Path,
+    staged: &std::path::Path,
+    backup: &std::path::Path,
+    launch: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    if backup.exists() {
+        retry_file_op(|| std::fs::remove_file(backup))
+            .map_err(|e| format!("Could not clear previous update backup: {e}"))?;
+    }
+    retry_file_op(|| std::fs::rename(current, backup))
+        .map_err(|e| format!("Could not back up running executable: {e}"))?;
+    let install = retry_file_op(|| std::fs::rename(staged, current));
+    if let Err(e) = install {
+        return match retry_file_op(|| std::fs::rename(backup, current)) {
+            Ok(()) => Err(format!("Update installation failed; original executable restored: {e}")),
+            Err(restore) => Err(format!("Update failed: {e}. Restore failed: {restore}. Original is at {}", backup.display())),
+        };
+    }
+    if let Err(e) = launch(current) {
+        if let Err(move_error) = retry_file_op(|| std::fs::rename(current, staged)) {
+            return Err(format!("Update launch failed: {e}. Could not move failed update aside: {move_error}. Original is at {}", backup.display()));
+        }
+        return match retry_file_op(|| std::fs::rename(backup, current)) {
+            Ok(()) => Err(format!("Update launch failed; original executable restored: {e}")),
+            Err(restore) => Err(format!("Update launch failed: {e}. Restore failed: {restore}. Original is at {}", backup.display())),
+        };
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use super::*;
+    fn fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("devtool-update-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("current.exe");
+        let staged = dir.join("staged.exe");
+        let backup = dir.join("backup.exe");
+        std::fs::write(&current, b"original").unwrap();
+        (dir, current, staged, backup)
+    }
+    #[test]
+    fn failed_install_restores_original_path() {
+        let (dir, current, staged, backup) = fixture("install-failure");
+        let result = install_with_rollback(&current, &staged, &backup, |_| panic!("must not launch"));
+        assert!(result.unwrap_err().contains("original executable restored"));
+        assert_eq!(std::fs::read(&current).unwrap(), b"original");
+        assert!(!backup.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn failed_launch_restores_original_and_keeps_download() {
+        let (dir, current, staged, backup) = fixture("launch-failure");
+        std::fs::write(&staged, b"updated").unwrap();
+        let result = install_with_rollback(&current, &staged, &backup, |_| Err(std::io::Error::other("launch rejected")));
+        assert!(result.unwrap_err().contains("original executable restored"));
+        assert_eq!(std::fs::read(&current).unwrap(), b"original");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"updated");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn successful_install_keeps_original_backup() {
+        let (dir, current, staged, backup) = fixture("success");
+        std::fs::write(&staged, b"updated").unwrap();
+        install_with_rollback(&current, &staged, &backup, |p| {
+            assert_eq!(std::fs::read(p).unwrap(), b"updated");
+            Ok(())
+        }).unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), b"original");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

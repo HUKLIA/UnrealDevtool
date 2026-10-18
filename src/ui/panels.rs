@@ -19,6 +19,17 @@ impl DevToolApp {
         // visually inconsistent flipping between them. `card()` is
         // the one shared frame the rest of the app already uses.
         card().show(ui, |ui| {
+                ui.label(heading("Window behavior", 13.0));
+                let mut behavior = self.close_behavior;
+                egui::ComboBox::from_id_salt("close_behavior").selected_text(format!("{:?}", behavior)).show_ui(ui, |ui| {
+                    use crate::config::CloseBehavior;
+                    ui.selectable_value(&mut behavior, CloseBehavior::Ask, "Ask when closing");
+                    ui.selectable_value(&mut behavior, CloseBehavior::Minimize, "Minimize to taskbar");
+                    ui.selectable_value(&mut behavior, CloseBehavior::Close, "Close app");
+                });
+                if behavior != self.close_behavior { self.set_close_behavior(behavior); }
+                ui.label(hint("Closing during a task always asks first. Minimize keeps work running."));
+                ui.add_space(10.0);
                 ui.label(egui::RichText::new("🎨  Customize Miku & Sound").size(13.0).color(accent()));
                 ui.add_space(10.0);
 

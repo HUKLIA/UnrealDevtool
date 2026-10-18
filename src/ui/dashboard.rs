@@ -216,32 +216,54 @@ impl DevToolApp {
                         "For a log that isn't the most recent one on disk — paste any excerpt below.",
                     ));
                     ui.add_space(6.0);
-                    ui.add(
+                    ui.add_enabled(self.log_import.is_none(),
                         egui::TextEdit::multiline(&mut self.pasted_log_input)
                             .desired_rows(3)
                             .desired_width(ui.available_width())
                             .hint_text("e.g. 'C:\\Program' is not recognized as an internal or external command..."),
                     );
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_enabled(self.log_import.is_none(), egui::Button::new("Open log...")).clicked() {
+                            if let Some(path) = rfd::FileDialog::new().add_filter("Logs", &["log", "txt"]).pick_file() {
+                                self.import_log(path, ui.ctx().clone());
+                            }
+                        }
+                        if ui.button("Copy report").on_hover_text("Includes matched lines and possibly private paths. Review before sharing.").clicked() {
+                            ui.ctx().copy_text(self.pasted_log_report());
+                        }
+                        if ui.button("Save report...").clicked() {
+                            if let Some(path) = rfd::FileDialog::new().set_file_name("diagnostic-report.txt").save_file() {
+                                self.status_display = match std::fs::write(&path, self.pasted_log_report()) {
+                                    Ok(()) => format!("Report saved to {}", path.display()),
+                                    Err(e) => format!("Could not save report: {e}"),
+                                };
+                            }
+                        }
                         let can_scan = !self.pasted_log_input.trim().is_empty();
                         ui.add_enabled_ui(can_scan, |ui| {
                             if ui.add_sized([120.0, 28.0], primary("Analyze")).clicked() {
                                 self.scan_pasted_log();
                             }
                         });
-                        if !self.pasted_log_diagnosis.is_empty()
+                        if !self.pasted_log_input.is_empty()
                             && ui.add_sized([80.0, 28.0], ghost("Clear")).clicked() {
                                 self.pasted_log_input.clear();
                                 self.pasted_log_diagnosis.clear();
                             }
                     });
 
+                    if self.log_import.is_some() { ui.spinner(); ui.label(hint("Reading log in background...")); }
+                    ui.checkbox(&mut self.redact_report_paths, "Redact known local paths in copied/saved reports");
+                    ui.label(hint("Review the report before sharing: credentials and other secrets are not automatically removed."));
                     if !self.pasted_log_diagnosis.is_empty() {
                         ui.add_space(8.0);
                         for d in &self.pasted_log_diagnosis {
                             callout(AMBER).show(ui, |ui| {
                                 ui.label(egui::RichText::new(&d.matched).size(11.5).color(AMBER).strong());
+                                egui::CollapsingHeader::new(format!("Context at line {}", d.line_number))
+                                    .id_salt(("diagnostic_context", d.line_number, &d.matched))
+                                    .show(ui, |ui| { ui.monospace(&d.context); });
                                 ui.add_space(4.0);
                                 ui.label(egui::RichText::new(&d.explanation).size(10.5).color(SOFT));
                                 ui.add_space(4.0);

@@ -31,6 +31,12 @@ const INTRO_FADE_SECS: f32 = 0.45;
 // ── Application state ─────────────────────────────────────────────────────────
 
 pub struct DevToolApp {
+    pub close_behavior: crate::config::CloseBehavior,
+    pub remember_close: bool,
+    pub log_import: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    pub redact_report_paths: bool,
+    pub close_prompt: bool,
+    pub close_confirmed: bool,
     pub engine_dir:           Option<PathBuf>,
     /// Manually-picked engine folder (persisted). When set and still valid,
     /// this wins over auto-detection — lets the user recover from
@@ -373,6 +379,12 @@ impl DevToolApp {
             .unwrap_or_else(|| include_bytes!("../Sound/Ievan Polkka.mp3").to_vec());
         let audio_player = AudioPlayer::new(audio_bytes, audio_cfg.muted, audio_cfg.volume);
         let mut app = Self {
+            close_behavior: crate::config::load_close_behavior(),
+            remember_close: false,
+            log_import: None,
+            redact_report_paths: true,
+            close_prompt: false,
+            close_confirmed: false,
             engine_dir,
             engine_override,
             project_path,
@@ -980,6 +992,11 @@ impl DevToolApp {
     /// isn't the most recent one on disk, or came from somewhere else.
     pub fn scan_pasted_log(&mut self) {
         self.pasted_log_diagnosis = crate::ops::diagnostics::scan_build_log_text(&self.pasted_log_input);
+        self.status_display = if self.pasted_log_diagnosis.is_empty() {
+            "No known error pattern found. This does not mean the build succeeded; inspect the first error and surrounding lines.".into()
+        } else {
+            format!("Found {} known error patterns. Review suggested fixes before changing files.", self.pasted_log_diagnosis.len())
+        };
     }
 
     // ── PC / environment pre-flight ──────────────────────────────────────────
@@ -1788,5 +1805,56 @@ impl DevToolApp {
 
     pub fn cancel_chat_message(&mut self) {
         self.chat_cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl DevToolApp {
+    pub fn set_close_behavior(&mut self, behavior: crate::config::CloseBehavior) {
+        match crate::config::save_close_behavior(behavior) {
+            Ok(()) => { self.close_behavior = behavior; self.remember_close = false; },
+            Err(e) => self.status_display = format!("Could not save close preference: {e}"),
+        }
+    }
+
+    pub fn import_log(&mut self, path: PathBuf, ctx: egui::Context) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.log_import = Some(rx);
+        self.status_display = "Reading log...".into();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::ops::diagnostics::read_log(&path));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn poll_log_import(&mut self) {
+        let Some(rx) = &self.log_import else { return };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.log_import = None;
+                match result {
+                    Ok(content) => { self.pasted_log_input = content; self.scan_pasted_log(); }
+                    Err(e) => self.status_display = format!("Could not import log: {e}"),
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.log_import = None;
+                self.status_display = "Log reader stopped unexpectedly. Try importing again.".into();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    pub fn pasted_log_report(&self) -> String {
+        let report = crate::ops::diagnostics::diagnostic_report(&self.pasted_log_input);
+        if !self.redact_report_paths { return report; }
+        let mut paths = Vec::new();
+        for key in ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] {
+            if let Ok(p) = std::env::var(key) { paths.push(p); }
+        }
+        if let Some(p) = self.project_path.as_ref().and_then(|p| p.parent()) {
+            paths.push(p.to_string_lossy().into_owned());
+        }
+        if let Some(p) = &self.engine_dir { paths.push(p.to_string_lossy().into_owned()); }
+        crate::ops::diagnostics::redact_paths(&report, &paths)
     }
 }
