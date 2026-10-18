@@ -2,6 +2,7 @@ mod bar_chart;
 pub mod browser;
 mod chat;
 mod dashboard;
+pub mod editor_repair;
 mod extras;
 mod git;
 pub mod guide;

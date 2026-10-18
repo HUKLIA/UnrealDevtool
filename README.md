@@ -165,6 +165,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - **Packaging music** — "Ievan Polkka" from *Hatsune Miku: Project DIVA F Complete Collection*, sourced from [Khinsider](https://downloads.khinsider.com/game-soundtracks/album/hatsune-miku-project-diva-f-complete-collection/2-21.%2520Ievan%2520Polkka.mp3). All rights belong to the original copyright holders.
 - **Fonts** — Space Grotesk and JetBrains Mono, both under the SIL Open Font License (see `Fonts/`).
 
+## Editor won't open? Diagnose and repair
+
+Use **Unreal tools > Editor won't open**, the first-run recovery button, or Ctrl+K. It checks broken Windows `.uproject` associations, the selector executable, project engine selection and startup settings. Preview a direct-open test, repair per-user Windows registration, or back up and change the editor startup map, renderer, engine association or generated editor preferences. Every repair requires an in-app confirmation; stale previews and restores that would overwrite newer work are refused.
+
+Windows default-app overrides may still require choosing the Unreal handler in Default apps. Direct launching can convert assets when using another engine, so choose the intended engine and use a project copy first. See [the recovery guide and verification details](docs/EDITOR-RECOVERY.md).
+
 ## Debugging, minimizing and free detection review
 
 Closing the window offers **Minimize**, **Close app**, or **Cancel**. Minimize keeps tasks running and leaves the app in the Windows taskbar. Closing during work warns that tools may be interrupted or remain running. **Remember my choice** saves the action; change it under **Settings > Window behavior**. A saved Close action still asks before exiting during active work.

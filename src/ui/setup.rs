@@ -32,6 +32,9 @@ impl DevToolApp {
                         ui.add_space(9.0);
                         ui.label(hint("Pick a .uproject file. The engine is found from it automatically."));
 
+                        if ui.button("Editor won't open? Diagnose Windows / Unreal setup").clicked() {
+                            self.open_editor_repair();
+                        }
                         ui.add_space(26.0);
                         card().show(ui, |ui| {
                             ui.set_min_width(ui.available_width());

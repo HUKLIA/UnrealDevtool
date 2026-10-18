@@ -5,6 +5,7 @@ pub mod crash;
 pub mod clock;
 pub mod diagnostics;
 pub mod engines;
+pub mod editor_repair;
 pub mod doctor;
 pub mod discord;
 pub mod git;

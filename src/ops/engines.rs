@@ -41,7 +41,7 @@ fn describe(dir: PathBuf) -> Option<EngineInstall> {
 /// one in use, a manual override): their sibling folders are checked too,
 /// which finds installs the registry does not list.
 pub fn list(also_near: &[PathBuf]) -> Vec<EngineInstall> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut dirs: Vec<PathBuf> = crate::engine::launcher_installs().into_iter().map(|(_, p)| p).collect();
 
     if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\EpicGames\\Unreal Engine") {
         for name in k.enum_keys().flatten() {
@@ -52,8 +52,8 @@ pub fn list(also_near: &[PathBuf]) -> Vec<EngineInstall> {
         }
     }
     if let Ok(b) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Software\\Epic Games\\Unreal Engine\\Builds") {
-        for (_, v) in b.enum_values().flatten() {
-            dirs.push(PathBuf::from(v.to_string()));
+        for (name, _) in b.enum_values().flatten() {
+            if let Ok(value) = b.get_value::<String, _>(&name) { dirs.push(PathBuf::from(value)); }
         }
     }
     for known in also_near {

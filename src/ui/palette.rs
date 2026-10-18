@@ -15,6 +15,7 @@ enum Cmd {
     StartBuild,
     Sheet(Sheet),
     Manual,
+    EditorRepair,
     Target(BuildTarget),
     Method(PackageMethod),
     Config(BuildConfiguration),
@@ -73,6 +74,7 @@ impl DevToolApp {
         ] {
             v.push(e(label, "", Cmd::Sheet(s)));
         }
+        v.push(e("Editor won't open: repair Unreal project association and startup settings", "", Cmd::EditorRepair));
         v.push(e("Open the manual", "F1", Cmd::Manual));
         // Not first, so Ctrl+K then Enter can never start a build by accident:
         // starting one closes the Unreal Editor. It has to be typed for.
@@ -151,6 +153,7 @@ impl DevToolApp {
         match cmd {
             Cmd::StartBuild => self.start_packaging(),
             Cmd::Sheet(s) => self.open_sheet(s),
+            Cmd::EditorRepair => self.open_editor_repair(),
             Cmd::Manual => self.open_guide(),
             Cmd::Target(t) => { self.build_target = t; self.refresh_doctor(); save_options(self); }
             Cmd::Method(m) => { self.package_method = m; save_options(self); }

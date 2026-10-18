@@ -26,6 +26,7 @@ pub enum ToolsTab {
     Plugins,
     Engines,
     Cheatsheet,
+    Repair,
 }
 
 /// Resolution choices for launching a game.
@@ -42,6 +43,7 @@ pub type AdbPending = Arc<Mutex<Option<Result<Vec<crate::ops::adb::Device>, Stri
 /// Everything the sheet remembers between frames.
 pub struct ToolsState {
     pub tab: ToolsTab,
+    pub repair: crate::ui::editor_repair::RepairState,
 
     // Commandlets
     pub run: Option<Arc<Mutex<ToolRun>>>,
@@ -98,6 +100,7 @@ impl Default for ToolsState {
     fn default() -> Self {
         Self {
             tab: ToolsTab::Commandlets,
+            repair: Default::default(),
             run: None, confirm: None,
             custom_name: String::new(), custom_args: String::new(), notice: None,
             log_window: true, windowed: true, no_sound: false, res: 0, extra: String::new(),
@@ -115,10 +118,6 @@ impl Default for ToolsState {
 
 impl DevToolApp {
     pub fn show_tools_sheet(&mut self, ui: &mut egui::Ui) {
-        if self.project_path.is_none() {
-            ui.label(hint("Open a project first — these tools work on one Unreal project."));
-            return;
-        }
         // Results from the background scan land here.
         if let Some(found) = self.tools.scan_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
             self.tools.insights = Some(found);
@@ -132,6 +131,7 @@ impl DevToolApp {
 
         ui.horizontal_wrapped(|ui| {
             for (t, label) in [
+                (ToolsTab::Repair, "Editor won't open"),
                 (ToolsTab::Commandlets, "Commandlets"),
                 (ToolsTab::Launch, "Launch"),
                 (ToolsTab::Content, "Size & content"),
@@ -149,8 +149,13 @@ impl DevToolApp {
         ui.add_space(12.0);
 
         let tab = self.tools.tab;
+        if self.project_path.is_none() && tab != ToolsTab::Repair {
+            ui.label(hint("Open a project first, or use Editor won't open to repair Windows associations."));
+            return;
+        }
         egui::ScrollArea::vertical().id_salt("tools_scroll").auto_shrink([false, false]).show(ui, |ui| {
             match tab {
+                ToolsTab::Repair => self.show_editor_repair(ui),
                 ToolsTab::Commandlets => self.show_commandlets(ui),
                 ToolsTab::Launch      => self.show_launch(ui),
                 ToolsTab::Content     => self.show_content_insights(ui),

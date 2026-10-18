@@ -17,6 +17,7 @@ impl DevToolApp {
         ui.add(egui::Label::new(hint(
             "Change the active project or engine, then review the checks that run before packaging.",
         )).wrap());
+        if ui.button("Editor won't open? Diagnose and repair").clicked() { self.open_editor_repair(); }
         ui.add_space(12.0);
 
         ui.columns(2, |cols| {

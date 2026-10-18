@@ -2,35 +2,37 @@ use std::path::{Path, PathBuf};
 use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER};
 use winreg::RegKey;
 
-/// Reads the `EngineAssociation` field from a `.uproject` JSON file without
-/// pulling in a JSON parser dependency.
-fn read_engine_association(uproject: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(uproject).ok()?;
-    let key = "\"EngineAssociation\"";
-    let after_key = &content[content.find(key)? + key.len()..];
-    let after_colon = after_key[after_key.find(':')? + 1..].trim_start();
-    if !after_colon.starts_with('"') { return None; }
-    let inner = &after_colon[1..];
-    let value = inner[..inner.find('"')?].trim().to_string();
-    if value.is_empty() { None } else { Some(value) }
+/// Resolve official Launcher versions, custom build aliases/GUIDs, and native
+/// project layouts without guessing that the newest engine is compatible.
+pub(crate) fn find_engine_by_association(assoc: &str) -> Option<PathBuf> {
+    let assoc = assoc.trim();
+    let custom = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Epic Games\\Unreal Engine\\Builds").ok()
+        .and_then(|k| k.get_value::<String, _>(assoc).ok()).map(PathBuf::from);
+    if let Some(p) = custom.filter(|p| is_valid_engine_dir(p)) { return Some(p); }
+    let installed = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(format!("SOFTWARE\\EpicGames\\Unreal Engine\\{assoc}")).ok()
+        .and_then(|k| k.get_value::<String, _>("InstalledDirectory").ok()).map(PathBuf::from);
+    if let Some(p) = installed.filter(|p| is_valid_engine_dir(p)) { return Some(p); }
+    launcher_installs().into_iter().find(|(id, p)| id == assoc && is_valid_engine_dir(p)).map(|(_, p)| p)
 }
 
-/// Resolves an `EngineAssociation` value to an engine directory:
-/// - `"5.4"` / `"4.27"` → `HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>`
-/// - `"{GUID}"` → `HKCU\Software\Epic Games\Unreal Engine\Builds\<guid>`
-fn find_engine_by_association(assoc: &str) -> Option<PathBuf> {
-    let assoc = assoc.trim();
-    let dir = if assoc.starts_with('{') {
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let builds = hkcu.open_subkey("Software\\Epic Games\\Unreal Engine\\Builds").ok()?;
-        builds.get_value::<String, _>(assoc).ok()?
-    } else {
-        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        let k = hklm.open_subkey(format!("SOFTWARE\\EpicGames\\Unreal Engine\\{}", assoc)).ok()?;
-        k.get_value::<String, _>("InstalledDirectory").ok()?
-    };
-    let path = PathBuf::from(&dir);
-    if is_valid_engine_dir(&path) { Some(path) } else { None }
+pub(crate) fn launcher_installs() -> Vec<(String, PathBuf)> {
+    let Some(root) = std::env::var_os("ProgramData") else { return Vec::new() };
+    let path = PathBuf::from(root).join("Epic/UnrealEngineLauncher/LauncherInstalled.dat");
+    let Some(json) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) else { return Vec::new() };
+    json.get("InstallationList").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| {
+        let id = v.get("AppName")?.as_str()?.strip_prefix("UE_")?.to_string();
+        Some((id, PathBuf::from(v.get("InstallLocation")?.as_str()?)))
+    }).collect()
+}
+
+pub(crate) fn project_engine(project: &Path) -> Option<PathBuf> {
+    if let Some(assoc) = crate::ops::engines::project_association(project) {
+        return find_engine_by_association(&assoc);
+    }
+    // Empty association is meaningful for a native project: search ancestors.
+    project.parent()?.ancestors().find(|p| is_valid_engine_dir(p)).map(Path::to_path_buf)
 }
 
 /// True if `dir` looks like the root of an Unreal Engine install — i.e. it
@@ -41,33 +43,14 @@ pub fn is_valid_engine_dir(dir: &Path) -> bool {
 }
 
 /// Finds the Unreal Engine installation that matches `uproject` (if provided),
-/// then falls back to scanning HKLM for the newest UE 5.x install, then HKCU
-/// custom builds. Using the project's `EngineAssociation` field avoids picking
+/// then falls back to the discovered installations sorted by their real engine
+/// version, including Launcher metadata and custom builds. Using the project's `EngineAssociation` field avoids picking
 /// the wrong version when multiple engine versions are installed side-by-side.
 pub fn detect_unreal_engine(uproject: Option<&Path>) -> Option<PathBuf> {
-    if let Some(proj) = uproject
-        && let Some(assoc) = read_engine_association(proj)
-            && let Some(dir) = find_engine_by_association(&assoc) {
-                return Some(dir);
-            }
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    for minor in (0..=9).rev() {
-        let key = format!("SOFTWARE\\EpicGames\\Unreal Engine\\5.{}", minor);
-        if let Ok(k) = hklm.open_subkey(&key)
-            && let Ok(dir) = k.get_value::<String, _>("InstalledDirectory") {
-                let path = PathBuf::from(&dir);
-                if is_valid_engine_dir(&path) { return Some(path); }
-            }
+    if let Some(proj) = uproject && let Some(dir) = project_engine(proj) {
+        return Some(dir);
     }
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(builds) = hkcu.open_subkey("Software\\Epic Games\\Unreal Engine\\Builds") {
-        for (_, value) in builds.enum_values().flatten() {
-            let path = PathBuf::from(value.to_string());
-            if is_valid_engine_dir(&path) { return Some(path); }
-        }
-    }
-    None
+    crate::ops::engines::list(&[]).into_iter().next().map(|e| e.dir)
 }
 
 pub fn build_init_status(engine: &Option<PathBuf>, project: &Option<PathBuf>) -> String {
@@ -80,4 +63,20 @@ pub fn build_init_status(engine: &Option<PathBuf>, project: &Option<PathBuf>) ->
         None    => "Project: not set".into(),
     };
     format!("Ready  |  {}  |  {}", eng, proj)
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn empty_association_uses_native_engine_in_an_ancestor() {
+        let root = std::env::temp_dir().join(format!("udt-native-{}-{}", std::process::id(), crate::ops::editor_repair::unique_id()));
+        std::fs::create_dir_all(root.join("Engine/Build/BatchFiles")).unwrap();
+        std::fs::write(root.join("Engine/Build/BatchFiles/RunUAT.bat"), "fixture").unwrap();
+        std::fs::create_dir_all(root.join("Games/Native")).unwrap();
+        let project = root.join("Games/Native/Native.uproject");
+        std::fs::write(&project, r#"{"EngineAssociation":""}"#).unwrap();
+        assert_eq!(project_engine(&project), Some(root.clone()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
