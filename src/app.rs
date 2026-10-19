@@ -101,7 +101,7 @@ pub struct DevToolApp {
     pub app_check_github:    Arc<Mutex<Option<crate::ops::preflight::CheckItem>>>,
 
     // Post-package upload panel
-    pub pending_zip:        Arc<Mutex<Option<PathBuf>>>,
+    pub package_result_pending: Arc<Mutex<Option<crate::types::PackageTaskResult>>>,
     pub show_upload_panel:  bool,
     pub upload_zip_path:    PathBuf,
     pub upload_use_local:   bool,
@@ -419,7 +419,7 @@ impl DevToolApp {
             build_log_diagnosis:  Vec::new(),
             app_check_items:      Vec::new(),
             app_check_github:     Arc::new(Mutex::new(None)),
-            pending_zip:        Arc::new(Mutex::new(None)),
+            package_result_pending: Arc::new(Mutex::new(None)),
             show_upload_panel:  false,
             upload_zip_path:    PathBuf::new(),
             upload_use_local:   false,
@@ -538,8 +538,10 @@ impl DevToolApp {
             app.open_package_config();
             app.refresh_builds();
         }
-        ops_update::cleanup_old_binary();
-        app.check_for_updates(cc.egui_ctx.clone());
+        if !crate::config::offline_mode() {
+            ops_update::cleanup_old_binary();
+            app.check_for_updates(cc.egui_ctx.clone());
+        }
         #[cfg(debug_assertions)]
         app.demo_outcome();
         app
@@ -629,14 +631,18 @@ impl DevToolApp {
         let ok = mode == "ok" || mode == "android";
         self.last_build = Some(crate::types::BuildOutcome {
             version: "v0.0.11".into(),
+            message: if ok { "Demo package succeeded.".into() } else { "Demo package failed validation.".into() },
             zip: ok.then(|| PathBuf::from("Q:/Demo/build/v0.0.11/Demo_v0.0.11.zip")),
+            archive_requested: true,
             bytes: 668 * 1024 * 1024,
             duration: std::time::Duration::from_secs(692),
             stages: [Some(std::time::Duration::from_secs(120)), Some(std::time::Duration::from_secs(400)),
                      Some(std::time::Duration::from_secs(60)), Some(std::time::Duration::from_secs(112))],
             warnings: 4,
             errors: if ok { 0 } else { 3 },
-            ok,
+            outcome: if ok { crate::types::PackageOutcome::Succeeded } else { crate::types::PackageOutcome::Failed },
+            archive_creation: if ok { crate::types::ArchiveCreation::Created } else { crate::types::ArchiveCreation::NotAttempted },
+            archive_verification: if ok { crate::types::ArchiveVerification::Verified } else { crate::types::ArchiveVerification::NotAttempted },
             platform: if mode == "android" { BuildTarget::Android } else { self.build_target },
             config: self.build_configuration,
             log: None,
@@ -839,6 +845,17 @@ impl DevToolApp {
 
     pub fn refresh_app_check(&mut self) {
         self.app_check_items = crate::ops::selfcheck::run_checks();
+
+        if crate::config::offline_mode() {
+            *self.app_check_github.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                crate::ops::preflight::CheckItem {
+                    status: crate::ops::preflight::CheckStatus::Warn,
+                    label: "GitHub connectivity".into(),
+                    detail: "Skipped because UDT_OFFLINE=1.".into(),
+                },
+            );
+            return;
+        }
 
         *self.app_check_github.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let slot = Arc::clone(&self.app_check_github);
@@ -1130,6 +1147,7 @@ impl DevToolApp {
     /// (read by the UI) if a newer build is available, then requests a repaint
     /// so the banner appears immediately without waiting for user input.
     pub fn check_for_updates(&mut self, ctx: egui::Context) {
+        if crate::config::offline_mode() { return; }
         let current_version = env!("CARGO_PKG_VERSION").to_string();
         let update_info = Arc::clone(&self.update_info);
         self.last_update_check = Instant::now();
@@ -1145,6 +1163,10 @@ impl DevToolApp {
     /// relaunch. On success the app exits; on failure the error is reported
     /// in the status area.
     pub fn start_update_install(&mut self, info: UpdateInfo) {
+        if crate::config::offline_mode() {
+            self.set_status("[ERROR] Update download and install are disabled while UDT_OFFLINE=1.".into());
+            return;
+        }
         self.show_update_banner = false;
         self.busy_label = "[ DOWNLOADING UPDATE ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
@@ -1417,7 +1439,8 @@ impl DevToolApp {
         if let Some(g) = &mut self.gif_player { g.reset(); }
         if let Some(a) = &mut self.audio_player { a.play_looping(); }
         let status_clone  = Arc::clone(&self.status_message);
-        let pending_clone = Arc::clone(&self.pending_zip);
+        reset_package_result_pending(&self.package_result_pending);
+        let package_result = Arc::clone(&self.package_result_pending);
         let cancel        = Arc::clone(&self.cancel_flag);
         let progress      = Arc::clone(&self.progress);
         let run           = Arc::clone(&self.run);
@@ -1445,11 +1468,28 @@ impl DevToolApp {
         self.last_build = None;
         let use_space_free_link = self.use_space_free_link;
         self.run_background_task("Starting UAT pipeline…", move || {
-            ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str, build_configuration, build_target, status_clone, pending_clone, cancel, progress, run, iterate, use_space_free_link, extra_args, package_method)
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops_package::package_game(project_path, engine_dir, pack_name, exe_name, version_str,
+                    build_configuration, build_target, status_clone, cancel, progress, run, iterate,
+                    use_space_free_link, extra_args, package_method, true)
+            })).unwrap_or_else(|_| crate::types::PackageTaskResult::failed(
+                "[ERROR] Packaging crashed unexpectedly. Check available disk space and the engine path.".into(),
+                true, crate::types::ArchiveCreation::NotAttempted,
+                crate::types::ArchiveVerification::NotAttempted,
+                None, None,
+            ));
+            let message = result.message.clone();
+            *package_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+            message
         });
     }
 
     pub fn start_upload(&mut self) {
+        if crate::config::offline_mode() && self.upload_use_gdrive {
+            self.set_status("[ERROR] Cloud upload is disabled while UDT_OFFLINE=1.".into());
+            self.show_upload_panel = false;
+            return;
+        }
         let zip = self.upload_zip_path.clone();
         if !zip.exists() {
             self.set_status(format!("[ERROR] Zip not found: {}", zip.display()));
@@ -1582,6 +1622,10 @@ impl DevToolApp {
     }
 
     pub fn git_start_commit_push(&mut self) {
+        if crate::config::offline_mode() {
+            self.set_status("[ERROR] Git push is disabled while UDT_OFFLINE=1.".into());
+            return;
+        }
         let dir    = match self.git_project_dir() { Some(d) => d, None => return };
         let msg    = self.git_commit_msg.trim().to_string();
         let branch = self.git_current_branch.clone();
@@ -1592,21 +1636,25 @@ impl DevToolApp {
         if let Some(g) = &mut self.gif_player { g.reset(); }
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
-        self.run_background_task("Staging changes…", move || {
+        self.run_background_task("Committing staged files and pushing…", move || {
             ops_git::task_git_commit_push(dir, msg, branch, status, result, cancel, progress)
         });
     }
 
     pub fn git_start_sync(&mut self) {
+        if crate::config::offline_mode() {
+            self.set_status("[ERROR] Git fetch is disabled while UDT_OFFLINE=1.".into());
+            return;
+        }
         let dir      = match self.git_project_dir() { Some(d) => d, None => return };
         let status   = Arc::clone(&self.status_message);
         let result   = Arc::clone(&self.git_result);
         let cancel   = Arc::clone(&self.cancel_flag);
         let progress = Arc::clone(&self.progress);
         self.git_next_state = GitState::Idle;
-        self.busy_label     = "[ SYNCING WITH MAIN ]".into();
+        self.busy_label     = "[ UPDATING LOCAL BRANCH FROM MAIN ]".into();
         if let Some(g) = &mut self.gif_player { g.reset(); }
-        self.run_background_task("Fetching origin/main…", move || {
+        self.run_background_task("Fetching and rebasing locally (no push)…", move || {
             ops_git::task_git_sync(dir, status, result, cancel, progress)
         });
     }
@@ -1617,6 +1665,10 @@ impl DevToolApp {
     }
 
     pub fn git_start_merge(&mut self) {
+        if crate::config::offline_mode() {
+            self.set_status("[ERROR] Git merge-and-push is disabled while UDT_OFFLINE=1.".into());
+            return;
+        }
         let dir         = match self.git_project_dir() { Some(d) => d, None => return };
         let from_branch = self.git_current_branch.clone();
         let status      = Arc::clone(&self.status_message);
@@ -1721,6 +1773,10 @@ impl DevToolApp {
     /// UI thread (the common case is "nothing is running", and DNS/socket
     /// setup still costs real time).
     pub fn detect_chat_providers(&mut self) {
+        if crate::config::offline_mode() {
+            *self.chat_providers.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+            return;
+        }
         let mut detecting = self.chat_detecting.lock().unwrap_or_else(|e| e.into_inner());
         if *detecting { return; }
         *detecting = true;
@@ -1757,6 +1813,11 @@ impl DevToolApp {
     }
 
     pub fn send_chat_message(&mut self) {
+        if crate::config::offline_mode() {
+            *self.chat_streaming.lock().unwrap_or_else(|e| e.into_inner()) =
+                "Chat is disabled while UDT_OFFLINE=1.".into();
+            return;
+        }
         let text = self.chat_input.trim().to_string();
         if text.is_empty() { return; }
         if *self.chat_busy.lock().unwrap_or_else(|e| e.into_inner()) { return; }
@@ -1856,5 +1917,26 @@ impl DevToolApp {
         }
         if let Some(p) = &self.engine_dir { paths.push(p.to_string_lossy().into_owned()); }
         crate::ops::diagnostics::redact_paths(&report, &paths)
+    }
+}
+
+fn reset_package_result_pending(
+    slot: &std::sync::Arc<std::sync::Mutex<Option<crate::types::PackageTaskResult>>>,
+) {
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+#[cfg(test)]
+mod package_result_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn starting_a_new_run_clears_the_previous_result() {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(
+            crate::types::PackageTaskResult::succeeded_without_archive(
+                "stale result".into(), None, None),
+        )));
+        reset_package_result_pending(&slot);
+        assert!(slot.lock().unwrap().is_none());
     }
 }

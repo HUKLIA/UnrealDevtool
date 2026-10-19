@@ -164,6 +164,15 @@ impl WebViewManager {
     /// Returns an error message if the panel failed to load (e.g. WebView2
     /// runtime missing).
     pub fn update(&mut self, wanted: Option<(WebPanel, egui::Rect)>, pixels_per_point: f32) -> Option<String> {
+        if crate::config::offline_mode() {
+            if let Some(active) = self.active
+                && let Some(entry) = self.views.get_mut(&active) {
+                    if let Ok(view) = &entry.view { let _ = view.set_visible(false); }
+                    entry.visible = false;
+                }
+            self.active = None;
+            return None;
+        }
         let wanted_panel = wanted.map(|(p, _)| p);
 
         if self.active != wanted_panel {

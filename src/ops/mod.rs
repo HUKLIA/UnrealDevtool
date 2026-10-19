@@ -11,6 +11,7 @@ pub mod discord;
 pub mod git;
 pub mod history;
 pub mod insights;
+pub mod issue_report;
 pub mod llm;
 pub mod monitor;
 pub mod package;
@@ -50,5 +51,6 @@ pub fn batch_cmd(script: &Path) -> Command {
 /// Fire-and-forget: there's nothing actionable to do on the UI thread if no
 /// default browser is registered, so failures are swallowed.
 pub fn open_url(url: &str) {
+    if crate::config::offline_mode() { return; }
     let _ = cmd("cmd").args(["/c", "start", "", url]).spawn();
 }

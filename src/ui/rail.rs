@@ -2,7 +2,6 @@ use eframe::egui;
 use crate::app::DevToolApp;
 use crate::ops::run::Stage;
 use crate::theme::*;
-use crate::types::GitAction;
 use crate::ui::shell::clock;
 
 impl DevToolApp {
@@ -26,8 +25,8 @@ impl DevToolApp {
     /// that and the full state machine opens from the Git menu.
     fn show_git_rail(&mut self, ui: &mut egui::Ui) {
         if self.git_project_dir().is_none() { return; }
-        let mut action = GitAction::None;
         let mut open_full = false;
+        let mut open_sync = false;
 
         // Read the two scalars this panel needs instead of deep-cloning the
         // whole summary (a String plus two Vecs) on every frame.
@@ -67,8 +66,8 @@ impl DevToolApp {
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 let w = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
-                if ui.add_sized([w, 32.0], chip("Sync", false)).clicked() {
-                    action = GitAction::StartSync;
+                if ui.add_sized([w, 32.0], chip("Update branch", false)).clicked() {
+                    open_sync = true;
                 }
                 if ui.add_sized([w, 32.0], chip("Git menu", false)).clicked() {
                     open_full = true;
@@ -81,13 +80,10 @@ impl DevToolApp {
         // Put the branch string back before anything else can observe it.
         self.git_current_branch = branch;
 
-        if open_full {
+        if open_full || open_sync {
             self.open_git_menu();
-            self.git_state = crate::types::GitState::Menu;
+            self.git_state = if open_sync { crate::types::GitState::SyncConfirm } else { crate::types::GitState::Menu };
             self.show_git_sheet = true;
-        }
-        if matches!(action, GitAction::StartSync) {
-            self.git_start_sync();
         }
     }
 

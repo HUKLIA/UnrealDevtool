@@ -60,6 +60,9 @@ pub fn parse_devices(text: &str) -> Vec<Device> {
 }
 
 pub fn devices(adb: &Path) -> Result<Vec<Device>, String> {
+    if crate::config::offline_mode() {
+        return Err("Android device discovery is disabled while UDT_OFFLINE=1.".into());
+    }
     let out = crate::ops::cmd(&adb.to_string_lossy())
         .args(["devices", "-l"])
         .output()
@@ -69,6 +72,9 @@ pub fn devices(adb: &Path) -> Result<Vec<Device>, String> {
 
 /// Installs (replacing any existing copy) and returns adb's own verdict.
 pub fn install(adb: &Path, serial: &str, apk: &Path) -> Result<String, String> {
+    if crate::config::offline_mode() {
+        return Err("Android device installs are disabled while UDT_OFFLINE=1.".into());
+    }
     let out = crate::ops::cmd(&adb.to_string_lossy())
         .args(["-s", serial, "install", "-r"])
         .arg(apk)

@@ -29,11 +29,11 @@ impl DevToolApp {
             ui.add_space(10.0);
 
             let w = [ui.available_width(), 36.0];
-            if ui.add_sized(w, primary("Commit & Push  (current branch)")).clicked() {
+            if ui.add_sized(w, primary("Commit staged files & Push")).clicked() {
                 self.git_state = GitState::CommitMsg;
             }
             ui.add_space(5.0);
-            if ui.add_sized(w, ghost("Sync  (fetch + rebase on main)")).clicked() {
+            if ui.add_sized(w, ghost("Update branch from main (no push)")).clicked() {
                 self.git_state = GitState::SyncConfirm;
             }
             ui.add_space(5.0);
@@ -62,9 +62,11 @@ impl DevToolApp {
         let branch     = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(heading("Commit & Push", 15.0));
+            ui.label(heading("Commit staged files & Push", 15.0));
             ui.label(egui::RichText::new(format!(">>  {}", branch)).size(11.0).color(MUTED));
             ui.add_space(8.0);
+            ui.label(egui::RichText::new("Only files already staged in your Git client will be committed.").size(10.5).color(AMBER));
+            ui.add_space(6.0);
             ui.label(egui::RichText::new("Commit message:").size(11.0).color(MUTED));
             let resp = ui.add(
                 egui::TextEdit::multiline(&mut self.git_commit_msg)
@@ -83,7 +85,7 @@ impl DevToolApp {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(can_commit, |ui| {
-                    if ui.add_sized([190.0, 32.0], primary("Commit & Push")).clicked() {
+                    if ui.add_sized([190.0, 32.0], primary("Commit staged & Push")).clicked() {
                         action = GitAction::StartCommitPush;
                     }
                 });
@@ -100,7 +102,7 @@ impl DevToolApp {
         let branch     = self.git_current_branch.clone();
 
         Self::git_frame().show(ui, |ui| {
-            ui.label(heading("Sync", 15.0));
+            ui.label(heading("Update branch from main", 15.0));
             ui.label(egui::RichText::new(format!("Branch: {}", branch)).size(11.0).color(MUTED));
             ui.add_space(8.0);
             Self::code_block().show(ui, |ui| {
@@ -109,11 +111,11 @@ impl DevToolApp {
             });
             ui.add_space(6.0);
             ui.label(egui::RichText::new(
-                "If a conflict occurs you will be asked to open Fork to resolve it."
+                "This rebases your local branch. It does not push. Use your Git client to review and publish the result."
             ).size(10.0).color(AMBER));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add_sized([190.0, 32.0], primary("Fetch & Rebase")).clicked() {
+                if ui.add_sized([190.0, 32.0], primary("Fetch & Rebase (local)")).clicked() {
                     action = GitAction::StartSync;
                 }
                 if ui.add_sized([90.0, 32.0], ghost("Back")).clicked() {

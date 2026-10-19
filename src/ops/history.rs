@@ -38,6 +38,8 @@ pub struct BuildInfo {
     pub platform: String,
     pub config:   String,
     pub ok:       bool,
+    /// Typed terminal state. Missing on older `build-info.txt` files.
+    pub outcome:  Option<crate::types::PackageOutcome>,
     pub secs:     u64,
     pub warnings: u32,
     pub errors:   u32,
@@ -52,8 +54,10 @@ pub const INFO_FILE: &str = "build-info.txt";
 impl BuildInfo {
     pub fn to_text(&self) -> String {
         format!(
-            "platform={}\nconfig={}\nok={}\nsecs={}\nwarnings={}\nerrors={}\nstages={},{},{},{}\ncommit={}\n",
-            self.platform, self.config, self.ok, self.secs, self.warnings, self.errors,
+            "platform={}\nconfig={}\nok={}\noutcome={}\nsecs={}\nwarnings={}\nerrors={}\nstages={},{},{},{}\ncommit={}\n",
+            self.platform, self.config, self.ok,
+            self.outcome.map(crate::types::PackageOutcome::as_str).unwrap_or(""),
+            self.secs, self.warnings, self.errors,
             self.stage_secs[0], self.stage_secs[1], self.stage_secs[2], self.stage_secs[3], self.commit,
         )
     }
@@ -70,6 +74,7 @@ impl BuildInfo {
                 "config"   => info.config = v.to_string(),
                 "commit"   => info.commit = v.to_string(),
                 "ok"       => info.ok = v == "true",
+                "outcome"  => info.outcome = crate::types::PackageOutcome::parse(v),
                 "secs"     => info.secs = v.parse().unwrap_or(0),
                 "warnings" => info.warnings = v.parse().unwrap_or(0),
                 "errors"   => info.errors = v.parse().unwrap_or(0),
@@ -88,7 +93,13 @@ impl BuildInfo {
     pub fn summary(&self) -> String {
         let (m, s) = (self.secs / 60, self.secs % 60);
         let mut out = format!("{} · {} · {m}:{s:02}", self.config, self.platform);
-        if !self.ok { out.push_str(" · failed"); }
+        match self.outcome {
+            Some(crate::types::PackageOutcome::Cancelled) => out.push_str(" · cancelled"),
+            Some(crate::types::PackageOutcome::Failed) => out.push_str(" · failed"),
+            Some(crate::types::PackageOutcome::Succeeded) => {}
+            None if !self.ok => out.push_str(" · failed"),
+            None => {}
+        }
         out
     }
 }
@@ -252,11 +263,27 @@ mod info_tests {
     fn build_info_round_trips_and_tolerates_junk() {
         let info = BuildInfo {
             platform: "Windows".into(), config: "Shipping".into(), ok: true,
+            outcome: Some(crate::types::PackageOutcome::Succeeded),
             secs: 692, warnings: 4, errors: 0, commit: "abc123def".into(), stage_secs: [120, 400, 60, 112],
         };
         assert_eq!(BuildInfo::parse(&info.to_text()), Some(info.clone()));
         assert_eq!(info.summary(), "Shipping · Windows · 11:32");
         assert_eq!(BuildInfo::parse("not a record"), None);
         assert_eq!(BuildInfo::parse("secs=abc\nzzz=1").map(|i| i.secs), Some(0));
+    }
+
+    #[test]
+    fn old_build_info_and_new_cancellation_remain_distinguishable() {
+        let old = BuildInfo::parse("platform=Windows\nconfig=Development\nok=false\n").unwrap();
+        assert_eq!(old.outcome, None);
+        assert!(old.summary().ends_with("failed"));
+
+        let cancelled = BuildInfo {
+            platform: "Windows".into(), config: "Development".into(), ok: false,
+            outcome: Some(crate::types::PackageOutcome::Cancelled), ..BuildInfo::default()
+        };
+        let loaded = BuildInfo::parse(&cancelled.to_text()).unwrap();
+        assert_eq!(loaded.outcome, Some(crate::types::PackageOutcome::Cancelled));
+        assert!(loaded.summary().ends_with("cancelled"));
     }
 }

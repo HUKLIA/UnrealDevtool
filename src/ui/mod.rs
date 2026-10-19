@@ -326,7 +326,8 @@ impl DevToolApp {
             self.clean_targets = found;
         }
 
-        if self.update_info.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+        if !crate::config::offline_mode()
+            && self.update_info.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
             let elapsed = self.last_update_check.elapsed();
             if elapsed >= UPDATE_CHECK_INTERVAL {
                 self.check_for_updates(ctx.clone());
@@ -409,29 +410,25 @@ impl DevToolApp {
         // Freeze the run's numbers into a result the Done surface can show.
         // Taken as a snapshot rather than read live, so the timings stop when
         // the build does instead of continuing to tick on screen.
-        let (stages, warnings, errors, any_stage, error_samples) = {
+        let (stages, warnings, errors, error_samples) = {
             let mut r = self.run.lock().unwrap_or_else(|e| e.into_inner());
             r.finish();
-            let any = r.started.iter().any(|s| s.is_some());
-            (r.elapsed, r.warnings, r.errors, any, r.error_samples.clone())
+            (r.elapsed, r.warnings, r.errors, r.error_samples.clone())
         };
-        let produced = self.pending_zip.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if produced.is_some() || any_stage {
+        let package_result = self.package_result_pending.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(result) = package_result {
+            let succeeded = result.is_success();
+            let produced = if result.archive_verification == crate::types::ArchiveVerification::Verified {
+                result.verified_zip.clone()
+            } else {
+                None
+            };
             let bytes = produced.as_ref()
                 .and_then(|z| std::fs::metadata(z).ok())
                 .map(|m| m.len())
                 .unwrap_or(0);
-            let status = self.status_display.clone();
-            let ok = !status.contains("[ERROR") && !status.contains("[CANCELLED");
-            // The folder this run wrote to: beside the zip when there is one,
-            // otherwise wherever the newest log is (a failed run has no zip).
-            let log = produced.as_ref()
-                .and_then(|z| z.parent())
-                .map(|d| d.join("BuildLog.txt"))
-                .filter(|l| l.is_file())
-                .or_else(|| self.project_path.as_ref()
-                    .and_then(|p| crate::ops::diagnostics::latest_build_log(p)));
-            let version_dir = log.as_ref().and_then(|l| l.parent()).map(|d| d.to_path_buf());
+            let log = result.log.filter(|p| p.is_file());
+            let version_dir = result.output_dir.clone();
             let version = version_dir.as_ref()
                 .and_then(|d| d.file_name())
                 .map(|n| n.to_string_lossy().to_string())
@@ -444,7 +441,8 @@ impl DevToolApp {
                 crate::ops::history::write_info(dir, &crate::ops::history::BuildInfo {
                     platform: self.build_target.label().to_string(),
                     config:   self.build_configuration.as_str().to_string(),
-                    ok,
+                    ok: succeeded,
+                    outcome: Some(result.outcome),
                     secs:     duration.as_secs(),
                     warnings,
                     errors,
@@ -457,13 +455,17 @@ impl DevToolApp {
             self.refresh_pc_check_cheap();
             self.last_build = Some(crate::types::BuildOutcome {
                 version,
+                message: result.message.clone(),
                 zip: produced.clone(),
+                outcome: result.outcome,
+                archive_requested: result.archive_requested,
+                archive_creation: result.archive_creation,
+                archive_verification: result.archive_verification,
                 bytes,
                 duration,
                 stages,
                 warnings,
                 errors,
-                ok,
                 platform: self.build_target,
                 config:   self.build_configuration,
                 log,
@@ -478,6 +480,10 @@ impl DevToolApp {
                     self.upload_use_gdrive = false;
                     self.gdrive_remote_status = None;
                     self.pending_open_folder_path = folder.to_path_buf();
+            } else if succeeded {
+                if let Some(folder) = version_dir.filter(|p| p.is_dir()) {
+                    self.pending_open_folder_path = folder;
+                }
                 }
         }
 

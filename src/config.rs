@@ -1,5 +1,30 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use sha2::{Digest, Sha256};
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PlaytestPreset {
+    pub name: String,
+    pub log_window: bool,
+    pub windowed: bool,
+    pub no_sound: bool,
+    pub resolution: usize,
+    pub extra_args: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetSaveResult { Added, Replaced, ReplacementNeedsConfirmation }
+
+pub fn upsert_playtest_preset(presets: &mut Vec<PlaytestPreset>, preset: PlaytestPreset, confirm_replace: bool) -> PresetSaveResult {
+    if let Some(index) = presets.iter().position(|p| p.name.eq_ignore_ascii_case(&preset.name)) {
+        if !confirm_replace { return PresetSaveResult::ReplacementNeedsConfirmation; }
+        presets[index] = preset;
+        PresetSaveResult::Replaced
+    } else {
+        presets.push(preset);
+        PresetSaveResult::Added
+    }
+}
 
 use crate::types::{BuildConfiguration, BuildTarget};
 
@@ -8,6 +33,16 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var("APPDATA")
         .ok()
         .map(|v| PathBuf::from(v).join("UnrealDevTool"))
+}
+
+/// Disable automatic network probes for local-only testing. This is an
+/// environment switch so it does not alter or rewrite the user's settings.
+pub fn offline_mode() -> bool {
+    std::env::var("UDT_OFFLINE").ok().is_some_and(|v| offline_value_enabled(&v))
+}
+
+fn offline_value_enabled(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
 // ── Project path persistence ──────────────────────────────────────────────────
@@ -94,9 +129,52 @@ pub fn clear_engine_path() {
 // Line 2: exe_name           (game exe is renamed to this)
 // Line 3: configuration      (Development or Shipping; missing = Development)
 
+fn project_identity(project_path: &Path) -> Option<(String, String)> {
+    let stem = project_path.file_stem()?.to_string_lossy().to_lowercase();
+    let stable_path = project_path.canonicalize().unwrap_or_else(|_| project_path.to_path_buf());
+    let normalized = stable_path.to_string_lossy().replace('/', "\\").to_lowercase();
+    let digest = Sha256::digest(normalized.as_bytes());
+    let suffix = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    Some((stem, suffix))
+}
+
+fn project_settings_file(project_path: &Path, kind: &str) -> Option<PathBuf> {
+    project_settings_file_in(&config_dir()?, project_path, kind)
+}
+
+fn project_settings_file_in(dir: &Path, project_path: &Path, kind: &str) -> Option<PathBuf> {
+    let (stem, suffix) = project_identity(project_path)?;
+    Some(dir.join(format!("{stem}-{suffix}_{kind}.cfg")))
+}
+
+fn legacy_project_settings_file_in(dir: &Path, project_path: &Path, kind: &str) -> Option<PathBuf> {
+    let stem = project_path.file_stem()?.to_string_lossy();
+    Some(dir.join(format!("{stem}_{kind}.cfg")))
+}
+
+/// Resolve a project-specific file, migrating a legacy stem-only file once.
+/// When two projects had the same stem, the first one opened claims the old
+/// preferences; subsequent projects get their own defaults and files.
+fn project_settings_file_for_load(project_path: &Path, kind: &str) -> Option<PathBuf> {
+    project_settings_file_for_load_in(&config_dir()?, project_path, kind)
+}
+
+fn project_settings_file_for_load_in(dir: &Path, project_path: &Path, kind: &str) -> Option<PathBuf> {
+    let current = project_settings_file_in(dir, project_path, kind)?;
+    if current.is_file() { return Some(current); }
+    if let Some(legacy) = legacy_project_settings_file_in(dir, project_path, kind).filter(|p| p.is_file()) {
+        if fs::rename(&legacy, &current).is_ok() {
+            return Some(current);
+        }
+    }
+    // A failed migration must never fall back to a stem-only file: another
+    // project with the same name could otherwise read the first project's
+    // settings.
+    Some(current)
+}
+
 pub fn project_config_file(project_path: &Path) -> Option<PathBuf> {
-    let stem = project_path.file_stem()?.to_string_lossy().to_string();
-    config_dir().map(|d| d.join(format!("{}_build.cfg", stem)))
+    project_settings_file(project_path, "build")
 }
 
 /// Reads the per-project build settings.
@@ -109,7 +187,7 @@ pub fn load_project_config(project_path: &Path) -> (String, String, BuildConfigu
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    if let Some(cfg) = project_config_file(project_path)
+    if let Some(cfg) = project_settings_file_for_load(project_path, "build")
         && let Ok(content) = fs::read_to_string(&cfg) {
             let mut lines = content.lines();
             let pack = lines.next().filter(|s| !s.trim().is_empty())
@@ -154,14 +232,13 @@ pub fn save_project_config(
 // older build would read back as the target or configuration.
 
 pub fn uat_options_file(project_path: &Path) -> Option<PathBuf> {
-    let stem = project_path.file_stem()?.to_string_lossy().to_string();
-    config_dir().map(|d| d.join(format!("{}_uat.cfg", stem)))
+    project_settings_file(project_path, "uat")
 }
 
 pub fn load_uat_options(project_path: &Path) -> (bool, String, crate::types::PackageMethod) {
     use crate::types::PackageMethod;
     let none = (false, String::new(), PackageMethod::Full);
-    let Some(f) = uat_options_file(project_path) else { return none };
+    let Some(f) = project_settings_file_for_load(project_path, "uat") else { return none };
     let Ok(content) = fs::read_to_string(f) else { return none };
     let mut lines = content.lines();
     let compress = lines.next().is_some_and(|l| l.trim() == "1");
@@ -184,12 +261,50 @@ pub fn save_uat_options(project_path: &Path, compress: bool, extra: &str, method
 // One line: the most a package should weigh, in megabytes. 0 or missing = none.
 
 fn budget_file(project_path: &Path) -> Option<PathBuf> {
-    let stem = project_path.file_stem()?.to_string_lossy().to_string();
-    config_dir().map(|d| d.join(format!("{}_budget.cfg", stem)))
+    project_settings_file(project_path, "budget")
+}
+
+fn playtest_presets_file(project_path: &Path) -> Option<PathBuf> {
+    project_settings_file(project_path, "playtests").map(|p| p.with_extension("json"))
+}
+
+fn playtest_report_file(project_path: &Path) -> Option<PathBuf> {
+    project_settings_file(project_path, "last_playtest").map(|p| p.with_extension("txt"))
+}
+
+pub fn load_playtest_presets(project_path: &Path) -> Vec<PlaytestPreset> {
+    playtest_presets_file(project_path)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_playtest_presets(project_path: &Path, presets: &[PlaytestPreset]) -> Result<(), String> {
+    let path = playtest_presets_file(project_path).ok_or("Could not identify this project")?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Could not create settings folder: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(presets).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| format!("Could not save playtest presets: {e}"))
+}
+
+pub fn load_playtest_report(project_path: &Path) -> String {
+    playtest_report_file(project_path)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .map(|text| crate::ops::tools::sanitize_playtest_receipt(&text))
+        .unwrap_or_default()
+}
+
+pub fn save_playtest_report(project_path: &Path, report: &str) -> Result<(), String> {
+    let path = playtest_report_file(project_path).ok_or("Could not identify this project")?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Could not create settings folder: {e}"))?;
+    }
+    fs::write(path, report).map_err(|e| format!("Could not save playtest report: {e}"))
 }
 
 pub fn load_size_budget(project_path: &Path) -> u32 {
-    budget_file(project_path)
+    project_settings_file_for_load(project_path, "budget")
         .and_then(|f| fs::read_to_string(f).ok())
         .and_then(|t| t.trim().parse().ok())
         .unwrap_or(0)
@@ -386,4 +501,101 @@ pub fn save_close_behavior(value: CloseBehavior) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::write(dir.join("window.json"), serde_json::to_string(&value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_named_projects_get_distinct_preferences() {
+        let a = Path::new(r"C:\Studio\ProjectA\Game.uproject");
+        let b = Path::new(r"D:\Archive\Game.uproject");
+        assert_ne!(project_config_file(a), project_config_file(b));
+        assert_ne!(uat_options_file(a), uat_options_file(b));
+        assert_ne!(budget_file(a), budget_file(b));
+    }
+
+    #[test]
+    fn project_path_matching_is_case_insensitive_on_windows() {
+        let a = Path::new(r"C:\Studio\Game.uproject");
+        let b = Path::new(r"c:\studio\game.UPROJECT");
+        assert_eq!(project_config_file(a), project_config_file(b));
+    }
+
+    #[test]
+    fn playtest_presets_round_trip_as_local_profile_data() {
+        let preset = PlaytestPreset {
+            name: "Level review".into(), log_window: true, windowed: true,
+            no_sound: false, resolution: 1, extra_args: "-ExecCmds=stat fps".into(),
+        };
+        let encoded = serde_json::to_string(&vec![preset.clone()]).unwrap();
+        let decoded: Vec<PlaytestPreset> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, vec![preset]);
+    }
+
+    #[test]
+    fn same_named_preset_is_preserved_until_replacement_is_confirmed() {
+        let original = PlaytestPreset { name: "Level review".into(), log_window: true,
+            windowed: true, no_sound: false, resolution: 1, extra_args: String::new() };
+        let replacement = PlaytestPreset { extra_args: "-nosplash".into(), ..original.clone() };
+        let mut presets = vec![original.clone()];
+        assert_eq!(upsert_playtest_preset(&mut presets, replacement.clone(), false), PresetSaveResult::ReplacementNeedsConfirmation);
+        assert_eq!(presets, vec![original]);
+        assert_eq!(upsert_playtest_preset(&mut presets, replacement.clone(), true), PresetSaveResult::Replaced);
+        assert_eq!(presets, vec![replacement]);
+    }
+
+    #[test]
+    fn failed_legacy_migration_never_returns_shared_settings() {
+        let dir = std::env::temp_dir().join(format!("udt-config-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let project = Path::new(r"C:\Studio\Game.uproject");
+        let current = project_settings_file_for_load_in(&dir, project, "build").unwrap();
+        // Force rename to fail on Windows by placing a directory at the target.
+        fs::create_dir(&current).unwrap();
+        let legacy = dir.join("Game_build.cfg");
+        fs::write(&legacy, "shared preferences").unwrap();
+
+        let resolved = project_settings_file_for_load_in(&dir, project, "build").unwrap();
+        assert_eq!(resolved, current);
+        assert!(legacy.is_file(), "failed migration should leave legacy data intact");
+        assert!(fs::read_to_string(&resolved).is_err(), "must not read the shared legacy file");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn first_same_named_project_claims_legacy_settings_without_sharing_them() {
+        let dir = std::env::current_dir().unwrap().join("target").join(format!("udt-config-migrate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let a_dir = dir.join("studio");
+        let b_dir = dir.join("archive");
+        fs::create_dir_all(&a_dir).unwrap();
+        fs::create_dir_all(&b_dir).unwrap();
+        let a = a_dir.join("Game.uproject");
+        let b = b_dir.join("Game.uproject");
+        let legacy = legacy_project_settings_file_in(&dir, &a, "build").unwrap();
+        fs::write(&legacy, "legacy Game settings").unwrap();
+
+        let migrated = project_settings_file_for_load_in(&dir, &a, "build").unwrap();
+        assert_eq!(fs::read_to_string(&migrated).unwrap(), "legacy Game settings");
+        assert!(!legacy.exists());
+
+        let second = project_settings_file_for_load_in(&dir, &b, "build").unwrap();
+        assert_ne!(migrated, second);
+        assert!(!second.exists(), "a second same-name project must not inherit the legacy contents");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn offline_switch_accepts_explicit_truthy_values() {
+        for value in ["1", "true", "YES", " on "] {
+            assert!(offline_value_enabled(value), "{value}");
+        }
+        for value in ["", "0", "false", "no"] {
+            assert!(!offline_value_enabled(value), "{value}");
+        }
+    }
 }

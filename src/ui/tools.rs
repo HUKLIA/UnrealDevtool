@@ -59,6 +59,15 @@ pub struct ToolsState {
     pub no_sound: bool,
     pub res: usize,
     pub extra: String,
+    pub playtest_name: String,
+    pub playtest_presets: Vec<crate::config::PlaytestPreset>,
+    pub playtest_selected: usize,
+    pub playtest_project: Option<std::path::PathBuf>,
+    pub playtest_report: String,
+    pub confirm_replace_preset: Option<String>,
+    pub issue_report: Option<crate::ops::issue_report::IssueReportDraft>,
+    pub issue_report_preview: bool,
+    pub issue_report_error: Option<String>,
 
     // Content
     pub from_build: bool,
@@ -104,6 +113,10 @@ impl Default for ToolsState {
             run: None, confirm: None,
             custom_name: String::new(), custom_args: String::new(), notice: None,
             log_window: true, windowed: true, no_sound: false, res: 0, extra: String::new(),
+            playtest_name: String::new(), playtest_presets: Vec::new(), playtest_selected: 0,
+            playtest_project: None, playtest_report: String::new(),
+            confirm_replace_preset: None,
+            issue_report: None, issue_report_preview: false, issue_report_error: None,
             from_build: false, scanning: false,
             scan_pending: Arc::new(Mutex::new(None)), insights: None,
             compare_pending: Arc::new(Mutex::new(None)), comparison: None, comparing: false,
@@ -356,9 +369,150 @@ impl DevToolApp {
     }
 
     fn show_launch(&mut self, ui: &mut egui::Ui) {
+        let project_for_presets = self.project_path.clone();
+        if project_for_presets != self.tools.playtest_project {
+            self.tools.playtest_presets = project_for_presets.as_ref()
+                .map(|path| crate::config::load_playtest_presets(path)).unwrap_or_default();
+            self.tools.playtest_selected = 0;
+            self.tools.playtest_report = project_for_presets.as_ref()
+                .map(|path| crate::config::load_playtest_report(path)).unwrap_or_default();
+            self.tools.playtest_project = project_for_presets;
+            self.tools.issue_report = None;
+            self.tools.issue_report_error = None;
+            self.tools.confirm_replace_preset = None;
+        }
         ui.add(egui::Label::new(hint(
-            "Start the editor, the game from the editor, or your latest packaged build, with the \
-             flags you would normally type. The command line is shown so nothing is hidden.")).wrap());
+            "Playtest this project or run its latest packaged build. Save launch settings as a named preset, then reuse them for the next review.")).wrap());
+        ui.add_space(10.0);
+
+        let mut preset_to_load = None;
+        let mut save_preset = false;
+        let save_name = self.tools.playtest_name.trim().to_string();
+        let save_name_exists = self.tools.playtest_presets.iter().any(|p| p.name.eq_ignore_ascii_case(&save_name));
+        let replace_is_confirmed = self.tools.confirm_replace_preset.as_deref() == Some(save_name.as_str());
+        card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(eyebrow("PLAYTEST PRESETS"));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if self.tools.playtest_presets.is_empty() {
+                    ui.label(hint("No saved presets for this project yet."));
+                } else {
+                    egui::ComboBox::from_id_salt("playtest_preset")
+                        .selected_text(self.tools.playtest_presets.get(self.tools.playtest_selected)
+                            .map(|p| p.name.as_str()).unwrap_or("Choose a preset"))
+                        .show_ui(ui, |ui| {
+                            for (i, preset) in self.tools.playtest_presets.iter().enumerate() {
+                                ui.selectable_value(&mut self.tools.playtest_selected, i, &preset.name);
+                            }
+                        });
+                    if ui.add_enabled(self.tools.playtest_selected < self.tools.playtest_presets.len(), quiet("Load preset")).clicked() {
+                        preset_to_load = self.tools.playtest_presets.get(self.tools.playtest_selected).cloned();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                let name_edit = ui.add_sized([ui.available_width() - 100.0, 26.0],
+                    egui::TextEdit::singleline(&mut self.tools.playtest_name).hint_text("Preset name, e.g. Level review"));
+                if name_edit.changed() { self.tools.confirm_replace_preset = None; }
+                let label = if save_name_exists && replace_is_confirmed { "Confirm replacement" }
+                    else if save_name_exists { "Replace…" } else { "Save current" };
+                if ui.add_enabled(!self.tools.playtest_name.trim().is_empty(), primary(label)).clicked() {
+                    save_preset = true;
+                }
+            });
+            ui.label(hint("Presets stay on this computer and belong to this project."));
+        });
+        if let Some(preset) = preset_to_load {
+            self.tools.log_window = preset.log_window;
+            self.tools.windowed = preset.windowed;
+            self.tools.no_sound = preset.no_sound;
+            self.tools.res = preset.resolution.min(RESOLUTIONS.len() - 1);
+            self.tools.extra = preset.extra_args;
+        }
+        if save_preset {
+            let preset = crate::config::PlaytestPreset {
+                name: self.tools.playtest_name.trim().to_string(),
+                log_window: self.tools.log_window,
+                windowed: self.tools.windowed,
+                no_sound: self.tools.no_sound,
+                resolution: self.tools.res.min(RESOLUTIONS.len() - 1),
+                extra_args: self.tools.extra.clone(),
+            };
+            let confirmed = self.tools.confirm_replace_preset.as_deref() == Some(preset.name.as_str());
+            let mut updated_presets = self.tools.playtest_presets.clone();
+            match crate::config::upsert_playtest_preset(&mut updated_presets, preset, confirmed) {
+                crate::config::PresetSaveResult::ReplacementNeedsConfirmation => {
+                    self.tools.confirm_replace_preset = Some(self.tools.playtest_name.trim().to_string());
+                    self.set_status("A preset already has this name. Click Confirm replacement to overwrite it.".into());
+                }
+                saved => {
+                    self.tools.confirm_replace_preset = None;
+                    updated_presets.sort_by_key(|p| p.name.to_lowercase());
+                    let selected = updated_presets.iter()
+                        .position(|p| p.name.eq_ignore_ascii_case(self.tools.playtest_name.trim())).unwrap_or(0);
+                    if let Some(project) = &self.tools.playtest_project {
+                        match crate::config::save_playtest_presets(project, &updated_presets) {
+                            Ok(()) => {
+                                self.tools.playtest_presets = updated_presets;
+                                self.tools.playtest_selected = selected;
+                                self.set_status(match saved {
+                                    crate::config::PresetSaveResult::Replaced => "Replaced playtest preset on this computer.".into(),
+                                    _ => "Saved playtest preset on this computer.".into(),
+                                });
+                            }
+                            Err(e) => self.set_status(format!("[ERROR] {e}")),
+                        }
+                    } else {
+                        self.set_status("[ERROR] Could not identify this project.".into());
+                    }
+                }
+            }
+        }
+        if !self.tools.playtest_report.is_empty() {
+            card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(eyebrow("LAST PLAYTEST REPORT"));
+                    if ui.add(quiet("Copy report")).clicked() {
+                        ui.ctx().copy_text(self.tools.playtest_report.clone());
+                    }
+                });
+                ui.add(egui::Label::new(egui::RichText::new(&self.tools.playtest_report).font(mono(10.0)).color(SOFT)).wrap());
+            });
+        }
+        let mut draft_build = false;
+        let mut draft_receipt = false;
+        card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(eyebrow("ISSUE REPORT"));
+            ui.add(egui::Label::new(hint("Start an editable local report from a saved build or launch receipt. Logs are listed as paths only and must be selected explicitly.")).wrap());
+            ui.horizontal_wrapped(|ui| {
+                let have_build = self.last_build.is_some() || !self.builds.is_empty();
+                if ui.add_enabled(have_build, quiet("Draft from latest build/run")).clicked() { draft_build = true; }
+                if ui.add_enabled(!self.tools.playtest_report.is_empty(), quiet("Draft from last launch receipt")).clicked() { draft_receipt = true; }
+            });
+        });
+        if (draft_build || draft_receipt) && let Some(project_file) = self.project_path.clone() {
+            let project_log = project_file.parent().unwrap_or(std::path::Path::new("."))
+                .join("Saved").join("Logs")
+                .join(format!("{}.log", project_file.file_stem().unwrap_or_default().to_string_lossy()));
+            if draft_build {
+                self.tools.issue_report = if let Some(build) = self.last_build.as_ref() {
+                    Some(crate::ops::issue_report::IssueReportDraft::from_build(&project_file, build, project_log))
+                } else {
+                    self.builds.first().map(|record| crate::ops::issue_report::IssueReportDraft::from_history(&project_file, record, project_log))
+                };
+            } else {
+                let build_identity = self.last_build.as_ref().map(|b| format!("{} · {} · {}", b.version, b.platform.label(), b.config.as_str()))
+                    .or_else(|| self.builds.first().map(|b| b.version.clone()));
+                self.tools.issue_report = Some(crate::ops::issue_report::IssueReportDraft::from_playtest(
+                    &project_file, &self.tools.playtest_report, build_identity));
+            }
+            self.tools.issue_report_preview = false;
+            self.tools.issue_report_error = None;
+        }
+        self.show_issue_report_draft(ui);
         ui.add_space(10.0);
 
         card().show(ui, |ui| {
@@ -439,11 +593,105 @@ impl DevToolApp {
 
         if let (Some((mode, exe)), Ok(o)) = (go, opts) {
             let args = tools::launch_args(mode, &project, &o);
-            match tools::launch(&exe, &args) {
-                Ok(()) => self.set_status(format!("Launched {}.", exe.display())),
-                Err(e) => self.set_status(format!("[ERROR] Could not launch {}: {e}", exe.display())),
+            let attempted_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs()).unwrap_or_default();
+            let project_log = project.parent().unwrap_or(std::path::Path::new("."))
+                .join("Saved").join("Logs")
+                .join(format!("{}.log", project.file_stem().unwrap_or_default().to_string_lossy()));
+            let mode_name = match mode {
+                LaunchMode::Editor => "Editor",
+                LaunchMode::Standalone => "Standalone game",
+                LaunchMode::Packaged => "Packaged game",
+            };
+            let base_receipt = format!(
+                "Attempted at (Unix time): {attempted_at}\nMode: {mode_name}\nProject: {}\nPreset: {}\nExecutable: {}\nArguments: {}\nProject log (if written): {}",
+                project.display(),
+                self.tools.playtest_presets.get(self.tools.playtest_selected).map(|p| p.name.as_str()).unwrap_or("Unsaved settings"),
+                exe.display(),
+                tools::receipt_launch_args(&args, &o.extra),
+                project_log.display(),
+            );
+            let (result, status) = match tools::launch(&exe, &args) {
+                Ok(()) => (
+                    format!("{base_receipt}\nResult: Windows accepted the launch request. This does not confirm the game started or completed."),
+                    format!("Launched {}.", exe.display()),
+                ),
+                Err(e) => (
+                    format!("{base_receipt}\nResult: Launch request failed: {e}"),
+                    format!("[ERROR] Could not launch {}: {e}", exe.display()),
+                ),
+            };
+            self.tools.playtest_report = result;
+            if let Some(project) = &self.tools.playtest_project {
+                match crate::config::save_playtest_report(project, &self.tools.playtest_report) {
+                    Ok(()) if !status.starts_with("[ERROR]") => self.set_status(format!("{status} Local receipt saved.")),
+                    Ok(()) => self.set_status(format!("{status} Failure receipt saved.")),
+                    Err(e) => self.set_status(format!("{status} [WARNING] Could not save receipt: {e}")),
+                }
+            } else {
+                self.set_status(status);
             }
         }
+    }
+
+    fn show_issue_report_draft(&mut self, ui: &mut egui::Ui) {
+        let Some(draft) = self.tools.issue_report.as_mut() else { return };
+        let mut close_draft = false;
+        card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(eyebrow("EDIT ISSUE REPORT"));
+                if ui.add(quiet("Close draft")).clicked() { close_draft = true; }
+            });
+            ui.add_space(5.0);
+            ui.label(hint("Only selected log paths appear in the report. Log files are never copied or read."));
+            ui.add_space(6.0);
+            ui.label(hint("Project identity"));
+            ui.add(egui::TextEdit::singleline(&mut draft.project));
+            ui.label(hint("Build / run identity"));
+            ui.add(egui::TextEdit::singleline(&mut draft.build_identity));
+            ui.label(hint("Requested status"));
+            ui.add(egui::TextEdit::multiline(&mut draft.requested_status).desired_rows(2));
+            ui.label(hint("Confirmed status (edit after checking the behavior)"));
+            ui.add(egui::TextEdit::multiline(&mut draft.confirmed_status).desired_rows(2));
+            ui.label(hint("Expected behavior"));
+            ui.add(egui::TextEdit::multiline(&mut draft.expected_behavior).desired_rows(2));
+            ui.label(hint("Actual behavior"));
+            ui.add(egui::TextEdit::multiline(&mut draft.actual_behavior).desired_rows(2));
+            ui.label(hint("Reproduction steps"));
+            ui.add(egui::TextEdit::multiline(&mut draft.reproduction_steps).desired_rows(3));
+            if !draft.attachments.is_empty() {
+                ui.add_space(5.0);
+                ui.label(eyebrow("OPTIONAL LOG PATHS — NOTHING IS COPIED"));
+                for attachment in &mut draft.attachments {
+                    let state = if attachment.path.is_file() { "" } else { " (missing/unavailable)" };
+                    ui.checkbox(&mut attachment.selected, format!("{}: {}{}", attachment.label, attachment.path.display(), state));
+                }
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.add(quiet(if self.tools.issue_report_preview { "Hide preview" } else { "Preview Markdown" })).clicked() {
+                    self.tools.issue_report_preview = !self.tools.issue_report_preview;
+                }
+                if ui.add(primary("Export locally…")).clicked() {
+                    let suggested = draft.suggested_filename();
+                    if let Some(path) = rfd::FileDialog::new().add_filter("Markdown report", &["md"])
+                        .set_file_name(&suggested).save_file() {
+                        self.tools.issue_report_error = Some(match draft.export_to(&path) {
+                            Ok(()) => format!("Exported report to {}", path.display()),
+                            Err(e) => format!("[ERROR] {e}"),
+                        });
+                    }
+                }
+            });
+            if let Some(message) = &self.tools.issue_report_error {
+                ui.label(egui::RichText::new(message).font(body(11.0)).color(if message.starts_with("[ERROR]") { RED } else { GREEN }));
+            }
+            if self.tools.issue_report_preview {
+                let mut preview = draft.markdown();
+                ui.add(egui::TextEdit::multiline(&mut preview).font(mono(10.0)).desired_rows(12).interactive(false));
+            }
+        });
+        if close_draft { self.tools.issue_report = None; }
     }
 
     // ── Size & content ──────────────────────────────────────────────────────

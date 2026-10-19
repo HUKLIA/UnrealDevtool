@@ -249,6 +249,27 @@ pub fn launch_args(mode: LaunchMode, project: &Path, o: &LaunchOpts) -> Vec<Stri
     v
 }
 
+/// A local receipt keeps the app-generated flags but omits arbitrary user
+/// arguments, which may contain API keys, passwords, or other credentials.
+pub fn receipt_launch_args(args: &[String], custom_args: &[String]) -> String {
+    let keep = args.len().saturating_sub(custom_args.len());
+    let mut receipt = args.iter().take(keep).cloned().collect::<Vec<_>>();
+    if !custom_args.is_empty() {
+        receipt.push(format!("<{} custom argument(s) omitted>", custom_args.len()));
+    }
+    receipt.join(" ")
+}
+
+/// Sanitize receipts created by older versions before presenting them as
+/// copyable text. New receipts already omit custom argument values.
+pub fn sanitize_playtest_receipt(receipt: &str) -> String {
+    receipt.lines().map(|line| {
+        if line.starts_with("Arguments:") {
+            "Arguments: [omitted from display for privacy]"
+        } else { line }
+    }).collect::<Vec<_>>().join("\n")
+}
+
 /// Starts a GUI program with its own working folder. Not hidden: this is the
 /// editor or a game, and the person asked to see it.
 pub fn launch(exe: &Path, args: &[String]) -> std::io::Result<()> {
@@ -300,6 +321,23 @@ mod tests {
         let packaged = launch_args(LaunchMode::Packaged, p, &o);
         assert_eq!(packaged[0], "-log", "a packaged build takes no project path");
         assert_eq!(packaged.last().unwrap(), "-ExecCmds=stat fps");
+    }
+
+    #[test]
+    fn launch_receipt_omits_user_supplied_arguments() {
+        let args = vec!["-log".into(), "-password=secret".into(), "-ExecCmds=login token".into()];
+        let custom = args[1..].to_vec();
+        let receipt = receipt_launch_args(&args, &custom);
+        assert_eq!(receipt, "-log <2 custom argument(s) omitted>");
+        assert!(!receipt.contains("secret") && !receipt.contains("token"));
+    }
+
+    #[test]
+    fn old_playtest_receipts_are_sanitized_before_display_or_copy() {
+        let receipt = sanitize_playtest_receipt("Mode: Editor\nArguments: -password=secret\nResult: accepted");
+        assert!(receipt.contains("Arguments: [omitted from display for privacy]"));
+        assert!(!receipt.contains("secret"));
+        assert!(receipt.contains("Result: accepted"));
     }
 
     /// Runs the first ready-made commandlet named by `UDT_REAL_COMMANDLET` (a

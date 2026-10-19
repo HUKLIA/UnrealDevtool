@@ -653,17 +653,21 @@ impl DevToolApp {
         let mut again = false;
         let mut next_target: Option<crate::types::BuildTarget> = None;
 
-        let ok_color = if out.ok { GREEN } else { RED };
+        let ok_color = match out.outcome {
+            crate::types::PackageOutcome::Succeeded if out.is_success() => GREEN,
+            crate::types::PackageOutcome::Cancelled => AMBER,
+            _ => RED,
+        };
         section()
             .stroke(egui::Stroke::new(1.0, tint(ok_color, 62)))
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     let (mark, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
                     ui.painter().rect_filled(mark, egui::Rounding::same(11.0), tint(ok_color, 36));
-                    paint_icon(ui.painter(), mark.center(), if out.ok { Icon::Check } else { Icon::Cross }, ok_color);
+                    paint_icon(ui.painter(), mark.center(), if out.is_success() { Icon::Check } else { Icon::Cross }, ok_color);
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(if out.ok { "BUILD COMPLETE" } else { "BUILD FAILED" })
+                        ui.label(egui::RichText::new(out.status_label())
                             .font(body(10.5)).color(ok_color));
                         ui.add_space(6.0);
                         ui.label(heading(&format!("{} {}", self.project_name(), out.version), 26.0));
@@ -732,13 +736,22 @@ impl DevToolApp {
                             });
                         });
                 }
+                ui.add_space(8.0);
+                ui.label(hint(&format!("Archive creation: {} · verification: {}",
+                    out.archive_creation.label(), out.archive_verification.label())));
             });
 
         // A failed build says why, on the surface, instead of leaving you to
         // find and read a multi-megabyte log.
-        if !out.ok {
+        if out.outcome == crate::types::PackageOutcome::Failed || !out.is_success() && out.outcome != crate::types::PackageOutcome::Cancelled {
             ui.add_space(14.0);
             self.show_failure_summary(ui, &out);
+        } else if out.outcome == crate::types::PackageOutcome::Cancelled {
+            section().show(ui, |ui| {
+                ui.label(eyebrow("BUILD CANCELLED"));
+                ui.add_space(6.0);
+                ui.label(hint(&out.message));
+            });
         }
 
         // Log and report, for either outcome: the log is where a warning you
@@ -751,7 +764,7 @@ impl DevToolApp {
                 let _ = crate::ops::cmd("explorer").arg(l).spawn();
             }
             // Try the build. Only a Windows build can be started from here.
-            if out.ok && out.platform == crate::types::BuildTarget::Win64 {
+            if out.is_success() && out.platform == crate::types::BuildTarget::Win64 {
                 let exe = out.zip.as_ref()
                     .and_then(|z| z.parent())
                     .map(|v| v.join(self.pack_name_input.trim()))
@@ -766,7 +779,7 @@ impl DevToolApp {
                     }
                 }
             }
-            if out.ok && self.git_project_dir().is_some()
+            if out.is_success() && self.git_project_dir().is_some()
                 && ui.add(quiet("Copy release notes"))
                     .on_hover_text("The commits made since the previous build, ready to paste").clicked() {
                 let notes = self.release_notes(&out);
@@ -780,12 +793,12 @@ impl DevToolApp {
             }
         });
 
-        if out.ok && out.platform == crate::types::BuildTarget::Android {
+        if out.is_success() && out.platform == crate::types::BuildTarget::Android {
             ui.add_space(14.0);
             self.show_android_install(ui, &out);
         }
 
-        if !out.ok {
+        if !out.is_success() {
             // Nothing to ship. Offering "upload" for a build that failed is how
             // a half-built folder ends up on someone's drive.
             ui.add_space(14.0);
@@ -1048,7 +1061,10 @@ Latest {} commits:
         let mut r = String::new();
         r.push_str(&format!("{} {} — {}
 ", self.project_name(), out.version,
-            if out.ok { "BUILD COMPLETE" } else { "BUILD FAILED" }));
+            out.status_label()));
+        r.push_str(&format!("Archive creation: {}   Verification: {}\n",
+            out.archive_creation.label(), out.archive_verification.label()));
+        r.push_str(&format!("Result: {}\n", out.message));
         r.push_str(&format!("Platform: {}   Configuration: {}
 ", out.platform.label(), out.config.as_str()));
         r.push_str(&format!("Duration: {}   Warnings: {}   Errors: {}

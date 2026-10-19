@@ -40,6 +40,7 @@ Make Unreal packaging **simple and calm** for one person or a small team:
 | **Check before you build** | Warns about a missing default map, low disk space, a missing Android SDK, and more. Some warnings have a one-click fix. |
 | **Monitor your project** | Live view of Unreal processes, the editor log, crashes, and folder sizes. |
 | **Run Unreal tools** | Compile all Blueprints, validate data, launch the editor or game with flags, see what makes the package big, switch plugins and engine versions. |
+| **Playtest** | Launch the editor, a standalone game, or the latest Windows package. Save launch settings as named presets for repeatable reviews, then draft a local issue report from a launch receipt or saved build. |
 | **Ship it** | Open the folder, upload with rclone, install on an Android phone, copy release notes from your git history. |
 | **Do things by typing** | Press `Ctrl+K` to search every action. Press `F1` for a guided tour. |
 
@@ -105,6 +106,7 @@ Honest list of what is not perfect:
 - **Tested mostly on Windows builds.** The "compile first" and "re-use last cook" methods were run for real on one Unreal 5.7 project. Installing to an Android phone, and the "fix up redirectors" / "resave all packages" tools, have not been tried on real devices or big projects.
 - **Windows or your antivirus may warn about it.** The app is not code-signed yet (see below). A warning needs investigation; being unsigned does not prove a detection is a false positive.
 - **Some tools change your files** (plugins, engine version, default map, `.gitignore`). They always ask first and keep a `.devtool-backup` copy, but commit your work before using them.
+- **Packaging needs the editor closed.** The app tells you to close Unreal yourself; it does not close editor processes, since another project could be open.
 - **rclone is not included.** For Google Drive upload you install rclone yourself; the app has a button that opens the download page.
 
 ## "My antivirus flags it"
@@ -174,6 +176,8 @@ Windows default-app overrides may still require choosing the Unreal handler in D
 ## Debugging, minimizing and free detection review
 
 Closing the window offers **Minimize**, **Close app**, or **Cancel**. Minimize keeps tasks running and leaves the app in the Windows taskbar. Closing during work warns that tools may be interrupted or remain running. **Remember my choice** saves the action; change it under **Settings > Window behavior**. A saved Close action still asks before exiting during active work.
+
+For local-only inspection, start the app with `UDT_OFFLINE=1`. This session switch skips update and GitHub checks, local LLM discovery/chat, embedded web pages and external links, cloud uploads and rclone setup, Android device discovery/install, and Git fetch/push/merge-push. Local Git inspection, local package/playtest work, and local report export remain available. It does not change saved settings or firewall subprocesses: Unreal, UAT, or a game you choose to launch can still make its own network requests.
 
 The pasted-log scanner imports `.log` and `.txt` files up to 8 MiB in the background, including UTF-8 and BOM-marked UTF-16. It recognizes 18 failure patterns without case sensitivity, orders matches by line number, and shows surrounding context. Copy or save a report with suggested next steps; known project, engine and user paths are redacted by default. Review it before sharing because credentials and other secrets are not automatically removed. App panics include a backtrace in `%APPDATA%\UnrealDevTool\crash.log`; release backtraces can have limited symbol detail.
 

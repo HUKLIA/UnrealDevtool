@@ -236,14 +236,19 @@ pub enum ExtrasTab {
 #[derive(Clone)]
 pub struct BuildOutcome {
     pub version:   String,
+    pub message:   String,
     pub zip:       Option<PathBuf>,
+    pub outcome:   PackageOutcome,
+    /// Whether this run requested a distributable ZIP as a required stage.
+    pub archive_requested: bool,
+    pub archive_creation: ArchiveCreation,
+    pub archive_verification: ArchiveVerification,
     pub bytes:     u64,
     pub duration:  Duration,
     /// Final per-stage durations, indexed by `ops::run::Stage::index`.
     pub stages:    [Option<Duration>; 4],
     pub warnings:  u32,
     pub errors:    u32,
-    pub ok:        bool,
     /// What it was built for, so the result does not have to assume Windows.
     pub platform:  BuildTarget,
     pub config:    BuildConfiguration,
@@ -251,6 +256,201 @@ pub struct BuildOutcome {
     pub log:       Option<PathBuf>,
     /// The first few error lines, for the failure summary.
     pub error_samples: Vec<String>,
+}
+
+/// Terminal state reported by the packaging operation itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl PackageOutcome {
+    pub fn is_success(self) -> bool { self == Self::Succeeded }
+
+    pub fn as_str(self) -> &'static str {
+        match self { Self::Succeeded => "succeeded", Self::Failed => "failed", Self::Cancelled => "cancelled" }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value { "succeeded" => Some(Self::Succeeded), "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled), _ => None }
+    }
+}
+
+/// ZIP creation and verification are separate because UAT can succeed even
+/// when no usable distributable archive was produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveCreation {
+    NotAttempted,
+    Created,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveVerification {
+    NotAttempted,
+    Verified,
+    Rejected,
+}
+
+/// Typed completion from the package pipeline. UI behavior must use these
+/// fields rather than parse the human-readable message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageTaskResult {
+    pub outcome: PackageOutcome,
+    pub archive_requested: bool,
+    pub archive_creation: ArchiveCreation,
+    pub archive_verification: ArchiveVerification,
+    pub message: String,
+    pub output_dir: Option<PathBuf>,
+    pub log: Option<PathBuf>,
+    /// Present only when the archive passed full entry/checksum verification.
+    pub verified_zip: Option<PathBuf>,
+}
+
+impl PackageTaskResult {
+    pub fn succeeded(message: String, output_dir: Option<PathBuf>, log: Option<PathBuf>, zip: PathBuf) -> Self {
+        Self { outcome: PackageOutcome::Succeeded, archive_requested: true, archive_creation: ArchiveCreation::Created,
+            archive_verification: ArchiveVerification::Verified, message, output_dir, log,
+            verified_zip: Some(zip) }
+    }
+
+    /// A successful package when the caller requested the output folder but no ZIP stage.
+    pub fn succeeded_without_archive(message: String, output_dir: Option<PathBuf>, log: Option<PathBuf>) -> Self {
+        Self { outcome: PackageOutcome::Succeeded, archive_requested: false,
+            archive_creation: ArchiveCreation::NotAttempted,
+            archive_verification: ArchiveVerification::NotAttempted, message, output_dir, log,
+            verified_zip: None }
+    }
+
+    pub fn failed(message: String, archive_requested: bool, archive_creation: ArchiveCreation,
+                  archive_verification: ArchiveVerification, output_dir: Option<PathBuf>,
+                  log: Option<PathBuf>) -> Self {
+        Self { outcome: PackageOutcome::Failed, archive_requested, archive_creation, archive_verification,
+            message, output_dir, log, verified_zip: None }
+    }
+
+    pub fn cancelled(message: String, archive_requested: bool, archive_creation: ArchiveCreation,
+                     output_dir: Option<PathBuf>, log: Option<PathBuf>) -> Self {
+        Self { outcome: PackageOutcome::Cancelled, archive_requested, archive_creation,
+            archive_verification: ArchiveVerification::NotAttempted,
+            message, output_dir, log, verified_zip: None }
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.outcome.is_success() && (!self.archive_requested
+            || (self.archive_creation == ArchiveCreation::Created
+                && self.archive_verification == ArchiveVerification::Verified
+                && self.verified_zip.is_some()))
+    }
+}
+
+impl ArchiveCreation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotAttempted => "not attempted",
+            Self::Created => "created",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl ArchiveVerification {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotAttempted => "not attempted",
+            Self::Verified => "verified",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+impl BuildOutcome {
+    pub fn is_success(&self) -> bool {
+        self.outcome.is_success() && (!self.archive_requested
+            || (self.archive_creation == ArchiveCreation::Created
+                && self.archive_verification == ArchiveVerification::Verified
+                && self.zip.is_some()))
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        if self.is_success() { "BUILD COMPLETE" }
+        else if self.outcome == PackageOutcome::Cancelled { "BUILD CANCELLED" }
+        else { "BUILD FAILED" }
+    }
+}
+
+#[cfg(test)]
+mod package_result_tests {
+    use super::*;
+
+    #[test]
+    fn error_text_cannot_turn_a_failed_task_into_success() {
+        let result = PackageTaskResult::failed(
+            "[DONE] misleading status followed by [ERROR] archive failed".into(),
+            true, ArchiveCreation::Created,
+            ArchiveVerification::Rejected,
+            None,
+            None,
+        );
+        assert_eq!(result.outcome, PackageOutcome::Failed);
+        assert_eq!(result.archive_verification, ArchiveVerification::Rejected);
+        assert!(!result.is_success());
+        assert!(result.verified_zip.is_none());
+    }
+
+    #[test]
+    fn cancellation_is_a_distinct_terminal_state() {
+        let result = PackageTaskResult::cancelled(
+            "[CANCELLED] stopped during packaging".into(),
+            true, ArchiveCreation::Cancelled,
+            None,
+            None,
+        );
+        assert_eq!(result.outcome, PackageOutcome::Cancelled);
+        assert_eq!(result.archive_creation, ArchiveCreation::Cancelled);
+        assert_eq!(result.archive_verification, ArchiveVerification::NotAttempted);
+        assert!(!result.is_success());
+    }
+
+    #[test]
+    fn requested_output_folder_succeeds_without_an_unrequested_archive() {
+        let result = PackageTaskResult::succeeded_without_archive(
+            "[DONE] Package output is ready.".into(), None, None);
+        assert!(result.is_success());
+        assert!(!result.archive_requested);
+        assert_eq!(result.archive_creation, ArchiveCreation::NotAttempted);
+        assert_eq!(result.archive_verification, ArchiveVerification::NotAttempted);
+        assert!(result.verified_zip.is_none());
+    }
+
+    #[test]
+    fn failure_to_create_a_requested_archive_fails_the_requested_workflow() {
+        let result = PackageTaskResult::failed(
+            "ZIP creation failed".into(), true, ArchiveCreation::Failed,
+            ArchiveVerification::NotAttempted, None, None);
+        assert!(result.archive_requested);
+        assert!(!result.is_success());
+    }
+
+    #[test]
+    fn an_unverified_archive_cannot_be_successful() {
+        let result = PackageTaskResult {
+            outcome: PackageOutcome::Succeeded,
+            archive_requested: true,
+            archive_creation: ArchiveCreation::Created,
+            archive_verification: ArchiveVerification::Rejected,
+            message: "[DONE] misleading legacy text".into(),
+            output_dir: None,
+            log: None,
+            verified_zip: None,
+        };
+        assert!(!result.is_success());
+    }
 }
 
 /// Every step in the git flow. Drives which panel the git sheet shows.

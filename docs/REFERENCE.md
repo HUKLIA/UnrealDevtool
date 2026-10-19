@@ -158,6 +158,7 @@ rail interpolate rather than switch.
 
 A finished build tells you what happened without opening a log:
 
+- The result records **succeeded**, **failed**, or **cancelled** from the packaging operation. ZIP creation and ZIP verification are separate states; only a verified ZIP is offered to run, upload, or reveal.
 - **Failed builds** show *What went wrong*: the recognised cause and its fix when the log matches a known signature, plus the first error lines UAT printed. Nothing is offered to ship; you get *Try again* and *Project checks*.
 - **Open build log** and **Copy report** (project, version, platform, configuration, per-stage timing, causes, first errors) are on every result.
 - **The taskbar flashes** when a build finishes while the window is in the background.
@@ -203,7 +204,7 @@ The pulse icon in the top bar opens a live view of the project. It only reads �
 The wrench icon (or `Ctrl+K` → *Open Unreal tools*).
 
 - **Commandlets** run `Engine/Binaries/Win64/UnrealEditor-Cmd.exe <project> -run=<Name> … -unattended -nopause -stdout` with the output written to `Saved/Logs/DevTool_<name>.log` and tailed on screen (warnings amber, errors red, Cancel kills the whole process tree). The editor must be closed, and only one run goes at a time. *Fix up redirectors* and *Resave all packages* rewrite assets, so they ask for a second click and say "commit first".
-- **Launch** never hides anything: the command line is displayed before you press Launch. Extra arguments must start with a dash and cannot contain shell metacharacters.
+- **Playtest** can launch the editor, a standalone game or the latest packaged build. The command line is displayed before launch. Save named launch presets on this computer for repeated reviews; they are stored per project. After Windows accepts a launch request, the app saves a local receipt with the executable, app-generated flags, timestamp and expected project log path; user-supplied extra arguments are omitted from receipts, including older receipts when shown/copied. This confirms only that the launch request was accepted, not that the game ran successfully. From the latest run or launch receipt, **Draft issue report** creates an editable local report with expected/actual behavior and reproduction steps. Log paths are opt-in checkboxes; the report never reads or copies log contents or launch arguments. Export saves a Markdown file to a local path you choose and refuses to overwrite an existing file. Extra arguments must start with a dash and cannot contain shell metacharacters.
 - **Size & content** scans on a background thread with a time limit (it reports a partial result rather than stalling). *Compare the last two builds* lists what grew or shrank by kind, by folder and by file, including files that appeared or vanished.
 - **Plugins** rewrites the `.uproject` keeping key order and Unreal's tab indentation; the first change saves `<project>.uproject.devtool-backup`. It refuses to edit while the editor is open.
 - **Cheatsheet** is a searchable list of about fifty everyday console commands and command-line flags. Click one to copy it; the `Ctrl+K` palette finds them too (`Copy: stat unit`).
@@ -212,6 +213,8 @@ The wrench icon (or `Ctrl+K` → *Open Unreal tools*).
 ## Packaging readiness
 
 *Project setup & checks* also lists problems in the project's own config that break or spoil a package: an unreadable `.uproject`, a code project with no `Source` folder, no default map (or one that does not exist under `Content`), and — when building for Android — the template package name `com.YourCompany.[PROJECT]`. The prechecks strip shows a count. Inside a git repository it also checks that `Intermediate`, `Saved`, `DerivedDataCache` and `Binaries` are in `.gitignore`. Where the app can be sure what to change, the check has a **fix button** — set the only (or obviously named) map as the default, or append the missing folders to `.gitignore` — which says exactly what it will do and keeps a `.devtool-backup` of any file it edits. After a successful build, the result offers one click to set up the same project for another platform.
+
+Packaging requires Unreal Editor and commandlet processes to be closed. DevTool checks for these processes and asks you to close them yourself; it never terminates an editor process by executable name, since that could close an unrelated project.
 
 ## Quick Links
 
@@ -243,12 +246,11 @@ Versions auto-increment as `v0.0.1`, `v0.0.2`, … based on existing build folde
 
 ## Sync with main
 
-"Sync with main" is fully automatic:
+"Update branch from main" performs a local rebase after fetching:
 1. `git fetch origin main`
 2. `git rebase origin/main`
-3. `git push --force-with-lease origin <current-branch>` (or a regular push if already on main/master)
 
-No manual pull or push needed after clicking the button.
+It does not push. Review and publish the result with your Git client. "Commit staged files & Push" only commits files you have already staged in your Git client; it never stages the whole project for you.
 
 ---
 
@@ -331,10 +333,10 @@ The in-app updater compares whole versions (major, minor, patch), so `v1.0.2` co
 
 ## Regenerating the screenshots
 
-The images in `docs/images/` come from a **debug** build, which accepts a `UDT_DEMO` environment variable so a screen can be opened without doing the work that produces it: `ready`, `running`, `ok`, `android`, `failed`, `monitor`, `checks`, `extras`, `palette`, `guide`, or a tools tab (`tools`, `tools-launch`, `tools-content`, `tools-compare`, `tools-plugins`, `tools-engines`, `tools-cheat`, `tools-run`). For example:
+The images in `docs/images/` come from a **debug** build, which accepts a `UDT_DEMO` environment variable so a screen can be opened without doing the work that produces it: `ready`, `running`, `ok`, `android`, `failed`, `monitor`, `checks`, `extras`, `palette`, `guide`, or a tools tab (`tools`, `tools-launch`, `tools-content`, `tools-compare`, `tools-plugins`, `tools-engines`, `tools-cheat`, `tools-run`). Use `UDT_OFFLINE=1` during local UI inspection to skip automatic update/GitHub checks, local LLM requests, embedded web pages/external links, cloud upload and rclone setup, Android device discovery/install, and Git fetch/push/merge-push. Local Git inspection, packaging/playtesting, and report export remain available. This gates DevTool-controlled network actions; it is not a system firewall for Unreal, UAT, or game processes you choose to launch. The switch is process-local and leaves saved settings unchanged. For example:
 
 ```powershell
-$env:UDT_DEMO = "running"; cargo run
+$env:UDT_OFFLINE = "1"; $env:UDT_DEMO = "running"; cargo run
 ```
 
 The switch does not exist in release builds. Crop the window border and the status bar (it shows local paths) before committing new images.

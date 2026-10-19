@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::types::BuildConfiguration;
+use crate::types::{ArchiveCreation, ArchiveVerification, BuildConfiguration, PackageTaskResult};
 
 /// Packages the Unreal project using UAT BuildCookRun.
 /// This function has many arguments by necessity (it runs on a background thread
@@ -19,7 +19,6 @@ pub fn package_game(
     configuration: BuildConfiguration,
     target:       crate::types::BuildTarget,
     status:       Arc<Mutex<String>>,
-    pending_zip:  Arc<Mutex<Option<PathBuf>>>,
     cancel:       Arc<AtomicBool>,
     progress:     Arc<Mutex<f32>>,
     // Live stage/log state, read by the run surface while this executes.
@@ -30,28 +29,38 @@ pub fn package_game(
     // Already validated by `parse_extra_uat_args`; appended verbatim.
     extra_args:   Vec<String>,
     method:       crate::types::PackageMethod,
-) -> String {
+    create_zip:   bool,
+) -> PackageTaskResult {
+    let mut archive_creation = ArchiveCreation::NotAttempted;
+    let mut archive_verification = ArchiveVerification::NotAttempted;
+    let mut output_dir: Option<PathBuf> = None;
+    let mut build_log: Option<PathBuf> = None;
     macro_rules! upd   { ($s:expr) => { *status.lock().unwrap() = $s.to_string(); }; }
     macro_rules! prog  { ($v:expr) => { *progress.lock().unwrap() = $v; }; }
+    macro_rules! fail { ($msg:expr) => {{ return PackageTaskResult::failed(
+        ($msg).to_string(), create_zip, archive_creation, archive_verification,
+        output_dir.clone(), build_log.clone(),
+    ); }}; }
     macro_rules! check { () => { if cancel.load(Ordering::Relaxed) {
-        return "[CANCELLED] Packaging was cancelled.".to_string();
+        return PackageTaskResult::cancelled("[CANCELLED] Packaging was cancelled.".to_string(),
+            create_zip, archive_creation, output_dir.clone(), build_log.clone());
     }}; }
 
     let project_dir = match uproject.parent() {
         Some(p) => p.to_path_buf(),
-        None    => return "[ERROR] Bad project path.".into(),
+        None    => fail!("[ERROR] Bad project path."),
     };
     if !uproject.is_file() {
-        return format!("[ERROR] Project file not found: {}", uproject.display());
+        fail!(format!("[ERROR] Project file not found: {}", uproject.display()));
     }
     if let Err(e) = validate_leaf_name(&pack_name, "Package name") {
-        return format!("[ERROR] {e}");
+        fail!(format!("[ERROR] {e}"));
     }
     if let Err(e) = validate_leaf_name(&exe_name, "Executable name") {
-        return format!("[ERROR] {e}");
+        fail!(format!("[ERROR] {e}"));
     }
     if let Err(e) = validate_leaf_name(&version_str, "Version") {
-        return format!("[ERROR] {e}");
+        fail!(format!("[ERROR] {e}"));
     }
 
     let build_dir   = project_dir.join("build");
@@ -60,33 +69,39 @@ pub fn package_game(
 
     if version_dir.exists() {
         if !version_dir.is_dir() {
-            return format!("[ERROR] Version output path is not a folder: {}", version_dir.display());
+            fail!(format!("[ERROR] Version output path is not a folder: {}", version_dir.display()));
         }
         match fs::read_dir(&version_dir) {
             Ok(mut entries) => {
                 if entries.next().is_some() {
-                    return format!(
+                    fail!(format!(
                         "[ERROR] Version output already exists: {}\nChoose a new version before packaging.",
                         version_dir.display(),
-                    );
+                    ));
                 }
             }
-            Err(e) => return format!("[ERROR] Read version output folder: {e}"),
+            Err(e) => fail!(format!("[ERROR] Read version output folder: {e}")),
         }
     }
 
     check!();
     upd!("[1/5] Closing Unreal Editor before packaging…");
-    if let Err(e) = close_editor_if_running(&status) {
-        return format!("[ERROR] {e}");
+    if let Err(e) = ensure_editor_closed(&status) {
+        fail!(format!("[ERROR] {e}"));
     }
     check!();
 
     prog!(0.02);
     upd!(format!("[1/5] Creating output directory…\n-> {}", version_dir.display()));
     if let Err(e) = fs::create_dir_all(&version_dir) {
-        return format!("[ERROR] mkdir: {}", e);
+        fail!(format!("[ERROR] mkdir: {}", e));
     }
+    // Only publish an output directory once this run has passed the collision
+    // check and created/claimed the destination. The UI writes build-info.txt
+    // there at completion; reporting an existing directory on the collision
+    // path would overwrite the previous build's record.
+    output_dir = Some(version_dir.clone());
+    build_log = Some(log_path.clone());
     prog!(0.05);
 
     // UAT's own batch scripts break on spaces in paths (most commonly hit via
@@ -101,11 +116,11 @@ pub fn package_game(
     let (engine_for_cmd, project_dir_for_cmd) = if use_space_free_link {
         let engine_alias = match crate::ops::preflight::ensure_space_free_alias(&engine) {
             Ok(p)  => p,
-            Err(e) => return format!("[ERROR] Could not create space-free link for engine path: {e}"),
+            Err(e) => fail!(format!("[ERROR] Could not create space-free link for engine path: {e}")),
         };
         let project_alias = match crate::ops::preflight::ensure_space_free_alias(&project_dir) {
             Ok(p)  => p,
-            Err(e) => return format!("[ERROR] Could not create space-free link for project path: {e}"),
+            Err(e) => fail!(format!("[ERROR] Could not create space-free link for project path: {e}")),
         };
         (engine_alias, project_alias)
     } else {
@@ -116,7 +131,7 @@ pub fn package_game(
 
     let runuat = engine_for_cmd.join("Engine\\Build\\BatchFiles\\RunUAT.bat");
     if !runuat.is_file() {
-        return format!("[ERROR] RunUAT.bat not found: {}", runuat.display());
+        fail!(format!("[ERROR] RunUAT.bat not found: {}", runuat.display()));
     }
     upd!(format!("[2/5] Running UAT BuildCookRun…  (may take 30+ min)\nLog -> {}", log_path.display()));
 
@@ -127,22 +142,22 @@ pub fn package_game(
     // reopen Unreal during the small setup window after the initial pre-flight.
     check!();
     upd!("[2/5] Verifying Unreal Editor is closed…");
-    if let Err(e) = close_editor_if_running(&status) {
-        return format!("[ERROR] {e}");
+    if let Err(e) = ensure_editor_closed(&status) {
+        fail!(format!("[ERROR] {e}"));
     }
 
     let stem = uproject.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let steps = StepEnv {
-        status: &status, run: &run, progress: &progress, cancel: &cancel, log_path: &log_path,
+        run: &run, progress: &progress, cancel: &cancel, log_path: &log_path,
     };
 
     // Restaging reuses a cook, so there has to be one for this platform.
     if method == PackageMethod::Restage && !has_cook_for(&project_dir, target.output_prefix()) {
-        return format!(
+        fail!(format!(
             "[ERROR] No previous {} cook found under {}.\nRun a Full package once first, then Restage can reuse it.",
             target.label(),
             project_dir.join("Saved").join("Cooked").display(),
-        );
+        ));
     }
 
     // Stepwise compiles the editor and game targets itself, which is only
@@ -159,7 +174,7 @@ pub fn package_game(
     if compile_first {
         let build_bat = engine_for_cmd.join(r"Engine\Build\BatchFiles\Build.bat");
         if !build_bat.is_file() {
-            return format!("[ERROR] Build.bat not found: {}", build_bat.display());
+            fail!(format!("[ERROR] Build.bat not found: {}", build_bat.display()));
         }
         // Editor target first — cooking runs the editor's code — then the game.
         let (game_target, editor_target) = code_targets.clone().unwrap_or_default();
@@ -173,8 +188,12 @@ pub fn package_game(
             c.arg(&tgt).arg(plat).arg(cfg)
                 .arg(format!("-Project={}", uproject_for_cmd.display()))
                 .args(["-WaitMutex", "-FromMsBuild"]);
-            if let Err(msg) = run_logged_step(&steps, name, c, i > 0, lo, hi, Some(Stage::Compile), false) {
-                return msg;
+            if let Err(failure) = run_logged_step(&steps, name, c, i > 0, lo, hi, Some(Stage::Compile), false) {
+                match failure {
+                    StepFailure::Failed(msg) => fail!(msg),
+                    StepFailure::Cancelled(msg) => return PackageTaskResult::cancelled(
+                        msg, create_zip, archive_creation, output_dir.clone(), build_log.clone()),
+                }
             }
         }
         uat_from = 0.27;
@@ -192,8 +211,12 @@ pub fn package_game(
         compile_first, iterate, &extra_args, &archive_dir_for_cmd,
     );
 
-    if let Err(msg) = run_logged_step(&steps, "UAT", uat, compile_first, uat_from, 0.80, None, true) {
-        return msg;
+    if let Err(failure) = run_logged_step(&steps, "UAT", uat, compile_first, uat_from, 0.80, None, true) {
+        match failure {
+            StepFailure::Failed(msg) => fail!(msg),
+            StepFailure::Cancelled(msg) => return PackageTaskResult::cancelled(
+                msg, create_zip, archive_creation, output_dir.clone(), build_log.clone()),
+        }
     }
     // One last read so the tail of the log is not lost, then close the open
     // stage so its duration is final rather than still counting.
@@ -210,12 +233,12 @@ pub fn package_game(
     // "Android_DXT", …) so the exact name is not known ahead of time.
     let prefix = target.output_prefix();
     let Some(uat_out) = find_output_dir(&version_dir, prefix) else {
-        return format!(
+        fail!(format!(
             "[ERROR] UAT output not found: no {}* folder under {}{}",
             prefix,
             version_dir.display(),
             uat_failure_details(&log_path),
-        );
+        ));
     };
 
     let package_dir = if uat_out.file_name().is_some_and(|n| n.eq_ignore_ascii_case(pack_name.as_str())) {
@@ -226,7 +249,7 @@ pub fn package_game(
         upd!(format!("[3/5] Renaming: {from} -> {}", pack_name));
         let dest = version_dir.join(&pack_name);
         if let Err(e) = fs::rename(&uat_out, &dest) {
-            return format!("[ERROR] rename folder: {}", e);
+            fail!(format!("[ERROR] rename folder: {}", e));
         }
         dest
     };
@@ -243,31 +266,38 @@ pub fn package_game(
             target_exe.clone()
         } else {
             let Some(found) = find_main_exe(&package_dir) else {
-                return format!("[ERROR] No packaged game executable found in {}", package_dir.display());
+                fail!(format!("[ERROR] No packaged game executable found in {}", package_dir.display()));
             };
             found
         };
         if found != target_exe
             && let Err(e) = fs::rename(&found, &target_exe)
         {
-            return format!("[ERROR] rename exe: {}", e);
+            fail!(format!("[ERROR] rename exe: {}", e));
         }
     } else {
         upd!(format!("[4/5] {} output left as packaged…", target.label()));
     }
 
+    if !package_dir.exists() {
+        fail!(format!("[ERROR] Package folder missing: {}", package_dir.display()));
+    }
+    if !create_zip {
+        check!();
+        prog!(1.0);
+        return PackageTaskResult::succeeded_without_archive(
+            format!("[DONE] {} · packaged to output folder.\nOutput -> {}", version_str, package_dir.display()),
+            output_dir.clone(), build_log.clone(),
+        );
+    }
+
     let zip_name = format!("{}_{}.zip", pack_name, version_str);
     let zip_path = version_dir.join(&zip_name);
-
-    // Set pending_zip now (before the zip runs) so the "Open Folder" panel
-    // appears even if Compress-Archive fails — UAT already succeeded, so the
-    // build is good regardless of whether we managed to zip it.
-    *pending_zip.lock().unwrap() = Some(zip_path.clone());
 
     upd!(format!("[5/5] Creating {}…", zip_name));
 
     if !package_dir.exists() {
-        return format!("[ERROR] Package folder missing: {}", package_dir.display());
+        fail!(format!("[ERROR] Package folder missing: {}", package_dir.display()));
     }
     check!();
     prog!(0.90);
@@ -281,20 +311,42 @@ pub fn package_game(
         Ok(()) => {}
         Err(ZipFailure::Cancelled) => {
             let _ = fs::remove_file(&zip_path);
-            return "[CANCELLED] Zip was cancelled.".to_string();
+            return PackageTaskResult::cancelled("[CANCELLED] Zip was cancelled.".to_string(), true, ArchiveCreation::Cancelled, output_dir.clone(), build_log.clone());
         }
         Err(ZipFailure::Io(e)) => {
             let _ = fs::remove_file(&zip_path);
-            return format!("[ERROR] Zip failed: {e}
-Log -> {}", log_path.display());
+            archive_creation = ArchiveCreation::Failed;
+            fail!(format!("[ERROR] Zip failed: {e}
+Log -> {}", log_path.display()));
         }
     }
+    archive_creation = ArchiveCreation::Created;
+    upd!("[5/5] Verifying archive…");
+    if let Err(e) = verify_zip_archive(&zip_path) {
+        let _ = fs::remove_file(&zip_path);
+        archive_verification = ArchiveVerification::Rejected;
+        fail!(format!("[ERROR] Archive verification failed: {e}\nLog -> {}", log_path.display()));
+    }
+    // Publish the archive to the result/upload surfaces only after its
+    // central directory and every entry's decompression/checksum succeeded.
     prog!(1.0);
 
-    format!(
+    PackageTaskResult::succeeded(format!(
         "[DONE] {} — packaged!\nOutput -> {}\nZip    -> {}",
         version_str, version_dir.display(), zip_name,
-    )
+    ), output_dir.clone(), build_log.clone(), zip_path)
+}
+
+fn verify_zip_archive(path: &Path) -> Result<(), String> {
+    use std::io;
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut sink = io::sink();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        io::copy(&mut entry, &mut sink).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// The UAT command line for a method.
@@ -347,11 +399,16 @@ fn uat_command(
 
 /// What every step needs to report into and be cancelled through.
 struct StepEnv<'a> {
-    status:   &'a Arc<Mutex<String>>,
     run:      &'a Arc<Mutex<crate::ops::run::RunProgress>>,
     progress: &'a Arc<Mutex<f32>>,
     cancel:   &'a AtomicBool,
     log_path: &'a Path,
+}
+
+#[derive(Debug)]
+enum StepFailure {
+    Failed(String),
+    Cancelled(String),
 }
 
 /// Runs one process with its output going to the build log, tailing that log
@@ -375,7 +432,7 @@ fn run_logged_step(
     to: f32,
     stage: Option<crate::ops::run::Stage>,
     by_stage_weights: bool,
-) -> Result<(), String> {
+) -> Result<(), StepFailure> {
     let open = |append: bool| -> std::io::Result<fs::File> {
         if append {
             fs::OpenOptions::new().create(true).append(true).open(env.log_path)
@@ -383,14 +440,14 @@ fn run_logged_step(
             fs::File::create(env.log_path)
         }
     };
-    let out = open(append).map_err(|e| format!("[ERROR] Create log: {e}"))?;
-    let err = out.try_clone().map_err(|e| format!("[ERROR] Clone log handle: {e}"))?;
+    let out = open(append).map_err(|e| StepFailure::Failed(format!("[ERROR] Create log: {e}")))?;
+    let err = out.try_clone().map_err(|e| StepFailure::Failed(format!("[ERROR] Clone log handle: {e}")))?;
 
     if let Some(s) = stage {
         env.run.lock().unwrap_or_else(|e| e.into_inner()).mark_stage(s);
     }
     let mut child = command.stdout(out).stderr(err).spawn()
-        .map_err(|e| format!("[ERROR] {name} launch: {e}"))?;
+        .map_err(|e| StepFailure::Failed(format!("[ERROR] {name} launch: {e}")))?;
 
     *env.progress.lock().unwrap_or_else(|e| e.into_inner()) = from;
     let exit = loop {
@@ -399,18 +456,14 @@ fn run_logged_step(
             // UnrealBuildTool and UnrealEditor-Cmd as separate child
             // processes. Killing just the cmd.exe leaves those running —
             // UnrealEditor-Cmd then keeps the project locked, so the *next*
-            // build fails. Kill the whole process tree instead, and make sure
-            // no Unreal Editor process is left holding the project open.
+            // build fails. Kill the whole process tree instead. This PID is
+            // the task we started; never scan for editors by executable name.
             kill_process_tree(child.id());
             let _ = child.wait();
-            let close_note = close_editor_if_running(env.status)
-                .err()
-                .map(|e| format!("\n[WARNING] {e}"))
-                .unwrap_or_default();
-            return Err(format!(
-                "[CANCELLED] {name} was cancelled.\nPartial log -> {}{}",
-                env.log_path.display(), close_note,
-            ));
+            return Err(StepFailure::Cancelled(format!(
+                "[CANCELLED] {name} was cancelled.\nPartial log -> {}",
+                env.log_path.display(),
+            )));
         }
         match child.try_wait() {
             Ok(Some(s)) => break s,
@@ -431,21 +484,16 @@ fn run_logged_step(
                 drop(r);
                 std::thread::sleep(Duration::from_millis(300));
             }
-            Err(e) => return Err(format!("[ERROR] Waiting for {name}: {e}")),
+            Err(e) => return Err(StepFailure::Failed(format!("[ERROR] Waiting for {name}: {e}"))),
         }
     };
     if !exit.success() {
-        let close_note = close_editor_if_running(env.status)
-            .err()
-            .map(|e| format!("\n[WARNING] {e}"))
-            .unwrap_or_default();
         env.run.lock().unwrap_or_else(|e| e.into_inner()).ingest(env.log_path);
-        return Err(format!(
-            "[ERROR] {name} failed (exit {}).{}{}",
+        return Err(StepFailure::Failed(format!(
+            "[ERROR] {name} failed (exit {}).{}",
             exit.code().unwrap_or(-1),
             uat_failure_details(env.log_path),
-            close_note,
-        ));
+        )));
     }
     Ok(())
 }
@@ -662,6 +710,10 @@ pub fn gdrive_remote_exists() -> bool {
 /// browser for the user to sign in to the Google account that should have
 /// access to the destination folder — that part can't be automated.
 pub fn open_rclone_config_setup() -> std::io::Result<()> {
+    if crate::config::offline_mode() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,
+            "rclone setup is disabled while UDT_OFFLINE=1"));
+    }
     let Some(program) = rclone_program() else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -680,6 +732,9 @@ pub fn upload_via_rclone(
     status:      &Arc<Mutex<String>>,
     cancel:      &Arc<AtomicBool>,
 ) -> String {
+    if crate::config::offline_mode() {
+        return "[ERROR] Cloud upload is disabled while UDT_OFFLINE=1.".into();
+    }
     let dest = rclone_dest.trim();
     if dest.is_empty() {
         return "[ERROR] rclone destination is empty.\n\
@@ -822,54 +877,25 @@ pub fn is_editor_running() -> bool {
     EDITORS.iter().any(|e| is_process_running(e))
 }
 
-fn close_editor_if_running(status: &Arc<Mutex<String>>) -> Result<(), String> {
+fn ensure_editor_closed(status: &Arc<Mutex<String>>) -> Result<(), String> {
     const EDITORS: &[&str] = &[
         "UnrealEditor.exe",
         "UE4Editor.exe",
         "UnrealEditor-Cmd.exe",
         "UE4Editor-Cmd.exe",
     ];
-    for editor_exe in EDITORS {
-        if !is_process_running(editor_exe) { continue; }
-
-        *status.lock().unwrap() = format!(
-            "[PRE-FLIGHT] {} is open — closing it before packaging…",
-            editor_exe
-        );
-
-        // Graceful close first (sends WM_CLOSE)
-        crate::ops::cmd("taskkill")
-            .args(["/im", editor_exe])
-            .status()
-            .map_err(|e| format!("Could not request {} to close: {}", editor_exe, e))?;
-
-        // Wait up to 30 s for graceful exit (poll every 500 ms)
-        for _ in 0..60 {
-            std::thread::sleep(Duration::from_millis(500));
-            if !is_process_running(editor_exe) { break; }
-        }
-
-        // Force-kill if it still hasn't exited
-        if is_process_running(editor_exe) {
-            crate::ops::cmd("taskkill")
-                .args(["/f", "/t", "/im", editor_exe])
-                .status()
-                .map_err(|e| format!("Could not force-close {}: {}", editor_exe, e))?;
-            std::thread::sleep(Duration::from_secs(2));
-        }
-
-        if is_process_running(editor_exe) {
-            return Err(format!(
-                "Could not close {}. Save your work, close Unreal, and try again.",
-                editor_exe,
-            ));
-        }
-    }
-
-    if is_editor_running() {
-        return Err("Unreal is still running. Close it before packaging.".to_string());
+    if let Some(editor_exe) = EDITORS.iter().find(|name| is_process_running(name)) {
+        let message = editor_busy_message(editor_exe);
+        *status.lock().unwrap_or_else(|e| e.into_inner()) = message.clone();
+        return Err(message);
     }
     Ok(())
+}
+
+fn editor_busy_message(editor_exe: &str) -> String {
+    format!(
+        "[PRE-FLIGHT] {editor_exe} is running. Save your work and close Unreal Editor or Unreal commandlets before packaging. DevTool will not close other processes."
+    )
 }
 
 fn uat_failure_details(log_path: &Path) -> String {
@@ -1069,6 +1095,28 @@ mod tests {
     }
 
     #[test]
+    fn output_collision_does_not_claim_or_rewrite_existing_build_metadata() {
+        let root = std::env::temp_dir().join(format!("udt-output-collision-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("Game.uproject");
+        fs::create_dir_all(root.join("build/v0.0.1")).unwrap();
+        fs::write(&project, "{}").unwrap();
+        let metadata = root.join("build/v0.0.1/build-info.txt");
+        fs::write(&metadata, "existing successful build record").unwrap();
+        let result = package_game(
+            project, root.join("missing-engine"), "Game".into(), "Game".into(), "v0.0.1".into(),
+            BuildConfiguration::Development, crate::types::BuildTarget::Win64,
+            Arc::new(Mutex::new(String::new())), Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(0.0)), Arc::new(Mutex::new(crate::ops::run::RunProgress::default())),
+            false, false, Vec::new(), crate::types::PackageMethod::Full, true,
+        );
+        assert_eq!(result.outcome, crate::types::PackageOutcome::Failed);
+        assert!(result.output_dir.is_none(), "a refused pre-existing folder is not this run's output");
+        assert_eq!(fs::read_to_string(metadata).unwrap(), "existing successful build record");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failure_details_explain_the_error_and_show_log_tail() {
         let path = std::env::temp_dir().join(format!(
             "unreal-devtool-failure-log-{}.txt",
@@ -1087,6 +1135,13 @@ mod tests {
     }
 
     #[test]
+    fn running_editor_is_given_a_close_it_yourself_message() {
+        let message = editor_busy_message("UnrealEditor.exe");
+        assert!(message.contains("close Unreal Editor"));
+        assert!(message.contains("will not close other processes"));
+    }
+
+    #[test]
     fn zip_directory_round_trips_nested_files_with_forward_slashes() {
         let root = std::env::temp_dir().join(format!("unreal-devtool-zip-{}", std::process::id()));
         let src = root.join("src");
@@ -1099,6 +1154,7 @@ mod tests {
         let mut last = 0.0;
         zip_directory(&src, &dst, &cancel, |f| last = f).ok().expect("zip");
         assert!((last - 1.0).abs() < 1e-3, "progress reaches 1.0");
+        verify_zip_archive(&dst).expect("new archive verifies");
 
         let mut archive = zip::ZipArchive::new(fs::File::open(&dst).unwrap()).unwrap();
         let mut names: Vec<String> = (0..archive.len())
@@ -1109,6 +1165,10 @@ mod tests {
         // A cancelled run reports it rather than leaving a half-written success.
         let cancelled = AtomicBool::new(true);
         assert!(matches!(zip_directory(&src, &dst, &cancelled, |_| {}), Err(ZipFailure::Cancelled)));
+
+        let corrupt = root.join("corrupt.zip");
+        fs::write(&corrupt, b"not a zip archive").unwrap();
+        assert!(verify_zip_archive(&corrupt).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1201,11 +1261,10 @@ mod tests {
         fs::write(&bat, "@echo off\r\necho ********** COOK COMMAND STARTED **********\r\necho LogCook: Error: fake problem\r\nexit /b 0\r\n").unwrap();
         let log = root.join("BuildLog.txt");
 
-        let status = Arc::new(Mutex::new(String::new()));
         let run = Arc::new(Mutex::new(crate::ops::run::RunProgress::default()));
         let progress = Arc::new(Mutex::new(0.0f32));
         let cancel = AtomicBool::new(false);
-        let env = StepEnv { status: &status, run: &run, progress: &progress, cancel: &cancel, log_path: &log };
+        let env = StepEnv { run: &run, progress: &progress, cancel: &cancel, log_path: &log };
 
         let mut cmd = crate::ops::batch_cmd(&bat);
         cmd.arg("x");
@@ -1247,13 +1306,16 @@ mod tests {
         let result = package_game(
             project, engine, name.clone(), name, version,
             BuildConfiguration::Development, crate::types::BuildTarget::Win64,
-            status, Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)),
-            Arc::new(Mutex::new(0.0)), run.clone(), false, false, Vec::new(), method,
+            status, Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(0.0)), run.clone(), false, false, Vec::new(), method, true,
         );
         let r = run.lock().unwrap();
-        eprintln!("RESULT: {result}");
+        eprintln!("RESULT: {}", result.message);
         eprintln!("stages: {:?}", r.elapsed);
         eprintln!("warnings {} errors {}", r.warnings, r.errors);
-        assert!(result.starts_with("[DONE]"), "{result}");
+        assert_eq!(result.outcome, crate::types::PackageOutcome::Succeeded, "{}", result.message);
+        assert_eq!(result.archive_creation, ArchiveCreation::Created);
+        assert_eq!(result.archive_verification, ArchiveVerification::Verified);
+        assert!(result.verified_zip.is_some());
     }
 }

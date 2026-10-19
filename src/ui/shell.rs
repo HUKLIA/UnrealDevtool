@@ -141,7 +141,7 @@ impl DevToolApp {
                     self.toggle_sheet(Sheet::Settings);
                 }
                 let checks = icon_button(ui, Icon::Check, open == Some(Sheet::Diagnostics))
-                    .on_hover_text("Project setup & checks");
+                    .on_hover_text("Check project readiness and fix setup issues");
                 // On Setup this is the way to change the detected project;
                 // on Ready it is also the route to the detailed prechecks.
                 self.guide_anchor(crate::ui::guide::step::PROJECT, checks.rect);
@@ -150,7 +150,7 @@ impl DevToolApp {
                     self.toggle_sheet(Sheet::Diagnostics);
                 }
                 let tools = icon_button(ui, Icon::Wrench, open == Some(Sheet::Tools))
-                    .on_hover_text("Unreal tools — commandlets, launch, size analysis, plugins");
+                    .on_hover_text("Playtest, validate content, inspect package size, or manage plugins");
                 self.guide_anchor(crate::ui::guide::step::TOOLS, tools.rect);
                 if tools.clicked() {
                     self.toggle_sheet(Sheet::Tools);

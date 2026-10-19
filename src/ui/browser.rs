@@ -31,6 +31,13 @@ impl DevToolApp {
     /// once keeps you signed in across restarts, exactly like a normal browser
     /// profile.
     pub fn show_browser_tab(&mut self, ui: &mut egui::Ui) {
+        if crate::config::offline_mode() {
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Offline mode is active. Embedded web pages are disabled for this session.")
+                .color(AMBER));
+            ui.label(hint("Unset UDT_OFFLINE or set it to 0, then restart to use the browser."));
+            return;
+        }
         // Collected during layout and applied after, since the closures below
         // borrow `self` while the webview manager also needs `&mut self`.
         let mut nav: Option<String> = None;

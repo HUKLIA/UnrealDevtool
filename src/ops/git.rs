@@ -8,6 +8,9 @@ use crate::types::GitTaskStatus;
 // ── Low-level git helpers ─────────────────────────────────────────────────────
 
 pub fn run_git(dir: &Path, args: &[&str]) -> (bool, String) {
+    if crate::config::offline_mode() && git_command_needs_network(args) {
+        return (false, "Git network operations are disabled while UDT_OFFLINE=1.".into());
+    }
     match crate::ops::cmd("git").args(args).current_dir(dir).output() {
         Err(e) => (false, format!("git not found: {}", e)),
         Ok(o)  => {
@@ -19,6 +22,15 @@ pub fn run_git(dir: &Path, args: &[&str]) -> (bool, String) {
             (o.status.success(), out)
         }
     }
+}
+
+fn git_command_needs_network(args: &[&str]) -> bool {
+    matches!(args.first().copied(), Some("fetch" | "pull" | "push" | "clone" | "ls-remote"))
+        || (args.first() == Some(&"submodule") && args.get(1).is_some_and(|a| matches!(*a, "update" | "init")))
+}
+
+fn staged_paths(output: &str) -> Vec<&str> {
+    output.lines().map(str::trim).filter(|line| !line.is_empty()).collect()
 }
 
 /// The commit HEAD points at, in full. `None` outside a repository.
@@ -292,47 +304,36 @@ pub fn task_git_commit_push(
     }}; }
 
     check!(); prog!(0.05);
-    upd!("[1/4] Staging all changes…");
-    let (ok, out) = run_git(&dir, &["add", "."]);
+    upd!("[1/3] Checking staged files…");
+    let (ok, staged) = run_git(&dir, &["diff", "--cached", "--name-only"]);
     if !ok {
         *result.lock().unwrap() = Some(GitTaskStatus::Error);
-        return format!("[ERROR] git add: {}", out);
+        return format!("[ERROR] Could not inspect staged files: {}", staged);
     }
-
-    let (_, porcelain) = run_git(&dir, &["status", "--porcelain"]);
-    let has_changes = !porcelain.trim().is_empty();
+    if staged_paths(&staged).is_empty() {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return "[ERROR] No files are staged. Review and stage the files you want to commit in your Git client first.".to_string();
+    }
 
     check!(); prog!(0.20);
-    if has_changes {
-        upd!(format!("[2/4] Committing: \"{}\"…", msg));
-        let (ok, out) = run_git(&dir, &["commit", "-m", &msg]);
-        if !ok {
-            *result.lock().unwrap() = Some(GitTaskStatus::Error);
-            return format!("[ERROR] git commit: {}", out);
-        }
-    } else {
-        upd!("[2/4] Nothing to commit — skipping commit step.");
+    upd!(format!("[2/3] Committing staged files: \"{}\"…", msg));
+    let (ok, out) = run_git(&dir, &["commit", "-m", &msg]);
+    if !ok {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return format!("[ERROR] git commit: {}", out);
     }
 
-    check!(); prog!(0.50);
-    upd!(format!("[3/4] Pushing to origin/{}…", branch));
+    check!(); prog!(0.55);
+    upd!(format!("[3/3] Pushing commit to origin/{}…", branch));
     let (ok, out) = run_git(&dir, &["push", "-u", "origin", &branch]);
     if !ok {
         *result.lock().unwrap() = Some(GitTaskStatus::Error);
         return format!("[ERROR] git push failed:\n{}\nForce push is never allowed.", out);
     }
 
-    prog!(0.80);
-    upd!("[4/4] Fetching to update remote tracking…");
-    let _ = run_git(&dir, &["fetch", "origin"]);
-
     prog!(1.0);
     *result.lock().unwrap() = Some(GitTaskStatus::Ok);
-    if has_changes {
-        format!("[DONE] Committed & pushed to  {}", branch)
-    } else {
-        format!("[DONE] Pushed (no new commit) to  {}", branch)
-    }
+    format!("[DONE] Committed the staged files and pushed to {}.", branch)
 }
 
 pub fn task_git_sync(
@@ -374,23 +375,9 @@ pub fn task_git_sync(
         return format!("[ERROR] rebase: {}", out);
     }
 
-    check!(); prog!(0.75);
-    upd!(format!("[3/3] Pushing {} to origin…", branch));
-    let branch_str = branch.as_str();
-    let is_main_branch = branch_str == "main" || branch_str == "master";
-    let (ok, out) = if is_main_branch {
-        run_git(&dir, &["push", "origin", branch_str])
-    } else {
-        run_git(&dir, &["push", "--force-with-lease", "origin", branch_str])
-    };
-    if !ok {
-        *result.lock().unwrap() = Some(GitTaskStatus::Error);
-        return format!("[ERROR] push: {}", out);
-    }
-
     prog!(1.0);
     *result.lock().unwrap() = Some(GitTaskStatus::Ok);
-    format!("[DONE] Synced with main and pushed {} to origin.", branch)
+    format!("[DONE] Fetched origin/main and rebased {}. No push was performed.", branch)
 }
 
 pub fn task_git_merge_to_main(
@@ -515,7 +502,7 @@ mod release_notes_tests {
 
     #[test]
     fn changes_are_listed_between_two_builds() {
-        let dir = std::env::temp_dir().join(format!("udt-notes-{}", std::process::id()));
+        let dir = std::env::current_dir().unwrap().join("target").join(format!("udt-notes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q"]);
@@ -542,6 +529,22 @@ mod release_notes_tests {
         assert_eq!(changes_since(&dir, None, 2).len(), 2);
         assert_eq!(changes_since(&dir, Some("0123456789abcdef0123456789abcdef01234567"), 15).len(), 3);
         assert!(changes_since(&dir, Some(&head_commit(&dir).unwrap()), 15).is_empty(), "nothing new");
-        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn commit_requires_explicitly_staged_paths() {
+        assert!(staged_paths("  \n").is_empty());
+        assert_eq!(staged_paths("Content/Map.umap\nSource/Game.cpp\n").len(), 2);
+    }
+
+    #[test]
+    fn offline_filter_blocks_only_network_git_commands() {
+        for args in [vec!["fetch", "origin"], vec!["push", "origin"], vec!["submodule", "update"]] {
+            assert!(git_command_needs_network(&args));
+        }
+        for args in [vec!["status"], vec!["branch", "--show-current"], vec!["commit", "-m", "test"]] {
+            assert!(!git_command_needs_network(&args));
+        }
     }
 }
