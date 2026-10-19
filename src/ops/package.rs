@@ -327,6 +327,18 @@ Log -> {}", log_path.display()));
         archive_verification = ArchiveVerification::Rejected;
         fail!(format!("[ERROR] Archive verification failed: {e}\nLog -> {}", log_path.display()));
     }
+    // Optional sidecar creation does not change the verified archive result.
+    let _handoff_note = crate::ops::handoff::write_verified_archive_handoff(
+        &zip_path,
+        uproject.file_stem().unwrap_or_default().to_string_lossy().as_ref(),
+        &version_str,
+        target.label(),
+        configuration.as_str(),
+        method.label(),
+    );
+    if let Err(e) = &_handoff_note {
+        upd!(format!("[WARNING] Package verified; handoff note could not be saved: {e}"));
+    }
     // Publish the archive to the result/upload surfaces only after its
     // central directory and every entry's decompression/checksum succeeded.
     prog!(1.0);

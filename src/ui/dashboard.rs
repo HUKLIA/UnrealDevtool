@@ -56,12 +56,15 @@ impl DevToolApp {
         });
 
         // Things in the project's own config that break or spoil a package.
-        if !self.doctor_items.is_empty() {
+        if !self.doctor_items.is_empty() || self.doctor_scanning {
             ui.add_space(10.0);
             card().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.label(eyebrow("PACKAGING READINESS"));
                 ui.add_space(4.0);
+                if self.doctor_scanning {
+                    ui.label(hint("Checking the selected project in the background�K"));
+                }
                 ui.label(hint(&format!(
                     "Read from the project's config files, for a {} build.", self.build_target.label())));
                 ui.add_space(8.0);

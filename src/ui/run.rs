@@ -499,6 +499,7 @@ impl DevToolApp {
                     CheckStatus::Ok => GREEN,
                     CheckStatus::Warn => AMBER,
                     CheckStatus::Fail => RED,
+                    CheckStatus::Unknown => AMBER,
                 },
                 item.detail.clone(),
             ),
@@ -757,7 +758,7 @@ impl DevToolApp {
         // Log and report, for either outcome: the log is where a warning you
         // care about lives, and the report is what you paste into a bug.
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let has_log = out.log.is_some();
             if ui.add_enabled(has_log, quiet("Open build log")).clicked()
                 && let Some(l) = &out.log {
@@ -790,6 +791,19 @@ impl DevToolApp {
                 let report = self.build_report(&out);
                 ui.ctx().copy_text(report);
                 self.set_status("Build report copied to the clipboard.".into());
+            }
+            if out.is_success() && out.zip.is_some()
+                && ui.add(quiet("Copy test handoff"))
+                    .on_hover_text("Copy the archive identity and a short tester checklist").clicked() {
+                let path = out.zip.as_ref().and_then(|z| z.parent())
+                    .map(|dir| dir.join(crate::ops::handoff::HANDOFF_FILE));
+                match path.and_then(|p| std::fs::read_to_string(p).ok()) {
+                    Some(handoff) => {
+                        ui.ctx().copy_text(handoff);
+                        self.set_status("Test handoff copied. The Markdown file is beside the archive.".into());
+                    }
+                    None => self.set_status("[WARNING] Build handoff is not available for this result.".into()),
+                }
             }
         });
 

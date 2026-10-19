@@ -1,5 +1,12 @@
 # Kaizen backlog
 
+## Current readiness increment (source/test verified)
+- Readiness scans run in one background worker; results require the current project path, target and generation, preventing stale A-to-B-to-A completion from replacing newer data.
+- `.uproject` reads are limited to 4 MiB. Unreadable/oversized descriptors report Unknown and give a next step. The dashboard shows active scanning.
+- Tests cover unreadable and oversized descriptors, path/target mismatch, and generation changes. Existing handoff tests verify existing notes are preserved on overwrite attempts.
+- Remaining: cancellation/deadline, build gating on a fresh scan, structured evidence/action fields, and live Windows UI acceptance.
+- Verified build: `C:\\Users\\Public\\Repo\\UnrealDevtool\\target\\build-verify\\debug\\unreal_devtool.exe`.
+
 Evidence comes from the read-only product audit and local implementation in this checkout. Status describes source and automated checks only; a feature is not runtime-verified unless noted.
 
 ## P0 — Protect the user's work
@@ -52,6 +59,12 @@ Evidence comes from the read-only product audit and local implementation in this
 - Privacy: project identity is a project name; launch arguments and log contents are never copied. Log paths remain unchecked until explicitly selected. Missing status/behavior data is labeled rather than inferred.
 - Acceptance: serialization, no false runtime confirmation, explicit attachment selection, Markdown export and export errors have unit coverage. Native screen review remains pending.
 
+### Hand off a verified build to QA and stakeholders — IMPLEMENTED, UI/UNREAL UNVERIFIED
+- Evidence: `src/ops/handoff.rs`, `src/ops/package.rs`, `src/ui/run.rs`.
+- User benefit: successful builds include a portable note with target/configuration/method, archive size and SHA-256, plus a tester checklist. QA can identify a transferred artifact and record a retest without learning UAT terminology.
+- Privacy and scope: includes project basename and archive basename only; no local file paths, logs, launch arguments or Git remote details. Created only after the existing ZIP integrity verifier passes. Explicitly says runtime/gameplay are not verified.
+- Acceptance: tests cover exact-file hashing, report scope/wording, Markdown escaping and create-new overwrite protection. Native UI copy behavior and a real Unreal package still require a manual smoke test.
+
 ### Harden build artifacts and provenance – PARTIAL
 - Evidence: backlog candidates 31, 35, 37, 39 and 40 in `docs/IMPROVEMENTS-100.md`.
 - User benefit: preview command, prevent output collisions, detect quiet/hung tools, capture engine/toolchain/commit at task start, validate archive integrity.
@@ -64,6 +77,6 @@ Evidence comes from the read-only product audit and local implementation in this
 
 ## Verified this increment
 - Previous increment: `cargo test --locked`: 99 passed, 0 failed, 2 ignored.
-- Current increment: local editable report drafts now start from build history, the current run or a playtest receipt. Build-output collision handling no longer claims or overwrites a prior build's metadata. Receipts omit user-provided argument values, including values in old receipts when displayed/copied; report export refuses to overwrite an existing file and uses safe code spans for selected paths. Preset replacement requires a second explicit click. `cargo test --locked` passed (118 passed, 0 failed, 2 ignored), `cargo build --locked` passed, and `git diff --check` passed with CRLF-to-LF advisory warnings. The offline debug app remained alive for 5 seconds with isolated `%APPDATA%` fixtures before the smoke harness stopped it. This was a startup smoke only; no network trace or UI interaction was performed.
+- Current increment: `cargo test --locked` passed (121 passed, 0 failed, 2 ignored); `cargo build --locked` passed; `git diff --check` passed with CRLF/LF advisory warnings. Handoff tests verify the SHA-256 of known bytes, streamed byte count, no local path disclosure, honest tester wording, Markdown escaping and create-new overwrite protection. UI copy behavior and a real Unreal build remain unverified.
 - `cargo fmt --check` was blocked in the previous increment because Windows Application Control blocked `cargo-fmt` (OS error 4551); this increment will not retry it.
 - 55 existing `f32` fallback warnings remain. Debug binary: `C:\Users\Public\Repo\UnrealDevtool\target\debug\unreal_devtool.exe`.

@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod discord;
 pub mod git;
 pub mod history;
+pub mod handoff;
 pub mod insights;
 pub mod issue_report;
 pub mod llm;

@@ -12,6 +12,8 @@ Local-only work in `C:\Users\Public\Repo\UnrealDevtool`. No cloud access, teleme
 - Add regression tests and run local tests/build. Avoid unverified claims.
 
 ## Progress
+- [x] Run project readiness checks in a single background worker, apply only results matching the current project, target, and scan generation, and show a scanning state. Project descriptor reads over 4 MiB or unreadable files are reported as Unknown with next-step guidance.
+- [x] Add readiness regression checks for oversized/unreadable descriptors and mismatched path/target plus A-to-B-to-A generation changes.
 - [x] Inspect instructions and initial repository status.
 - [x] Remove process-name-based editor termination; preflight asks the user to close Unreal.
 - [x] Commit only already staged Git files; branch update fetches/rebases locally and does not push.
@@ -25,9 +27,10 @@ Local-only work in `C:\Users\Public\Repo\UnrealDevtool`. No cloud access, teleme
 - [x] Improve playtest/readiness navigation language and update user docs.
 - [x] Add regression tests and run local tests/build.
 - [x] Start the debug app with `UDT_OFFLINE=1` and isolated `%APPDATA%`/project fixtures; it remained alive for 5 seconds before the smoke harness stopped its own process. No Unreal operation was started.
+- [x] Add portable `build-handoff.md` beside a successfully verified ZIP, with archive SHA-256/size, target/configuration/build method and a tester checklist; add a successful-build copy action.
 
 ## Blockers / unknowns
-- UI interactions and persistence across restart still need a safe Windows smoke test. The available CUA tool states: “Native computer APIs are disabled.”
+- UI interactions and persistence across restart still need a Windows smoke test. In this increment CUA reported no apps or browsers, did not expose `listWindows`, and the offline demo process exited before a window could be inspected; visual copy-action validation remains blocked.
 - Playtest receipt records only a launch request, not actual game completion; issue reports preserve that as unconfirmed and let the user add observed behavior and QA notes.
 - Non-packaging background tasks still use string results; package completion now uses typed outcomes end to end.
 - Legacy same-stem settings cannot identify their original project; first project opened claims the old file. If migration is blocked, the app uses project defaults rather than risk cross-project leakage.
@@ -37,11 +40,16 @@ Local-only work in `C:\Users\Public\Repo\UnrealDevtool`. No cloud access, teleme
 - 55 pre-existing compiler warnings remain.
 
 ## Verified results
+- Final bounded pass: `cargo test --locked` passed (124 passed, 0 failed, 2 ignored) with `TEMP`/`TMP` set to `target\\test-tmp`; `cargo build --locked --target-dir target\\build-verify` passed. Verified executable: `C:\\Users\\Public\\Repo\\UnrealDevtool\\target\\build-verify\\debug\\unreal_devtool.exe`. `git diff --check` passed (line-ending advisories only).
+- Default `cargo build --locked` could not replace `target\\debug\\unreal_devtool.exe` (Windows returned Access is denied). This is recorded as a file replacement/access failure; its cause was not verified. No alternate-path retry was made beyond the distinct verification target above.
+- The readiness worker is single-flight and generation checked, but has no cancellation/deadline, does not gate packaging, and does not yet attach structured evidence/action fields to each result. Manual UI validation remains outstanding.
 - Previous increment: `cargo test --locked`: 99 passed, 0 failed, 2 ignored.
-- Current increment: `cargo test --locked` passed (118 passed, 0 failed, 2 ignored) with `TEMP`/`TMP` directed to the writable workspace test fixture; `cargo build --locked` passed; `git diff --check` passed with CRLF-to-LF advisory warnings. Offline debug startup remained alive for 5 seconds with isolated `%APPDATA%` fixtures before the smoke harness stopped it. This was not a network trace or UI interaction.
+- Current handoff increment: `cargo test --locked` passed (121 passed, 0 failed, 2 ignored); `cargo build --locked` passed; `git diff --check` passed with CRLF/LF advisory warnings. Build emitted 55 pre-existing `f32` fallback warnings.
+- The isolated offline demo was launched to inspect the finished-build screen, but CUA returned empty app/browser inventories and the process exited before visual inspection. No Unreal project was opened or built.
 - `cargo fmt --check` was blocked in the previous increment because Windows Application Control denied `cargo-fmt` (OS error 4551); do not retry it through another route.
 - No Unreal packaging or project Git action was run.
 
 ## Next useful increment
 - When native Windows UI access is available, use `C:\Users\Public\Repo\UnrealDevtool\target\debug\unreal_devtool.exe` with `UDT_OFFLINE=1` and an isolated `%APPDATA%`/fixture project. Check: (1) save/load a playtest preset, confirm overwrite asks for a second click, and verify it remains project-specific after switching projects; (2) create reports from a launch receipt and saved build history, edit fields, verify logs start unchecked, preview and export to a new local `.md`; (3) confirm a second export cannot overwrite the first file; (4) cancel a test background task and confirm the Done/history states say cancelled; (5) open build history after success/failure/cancellation; (6) inspect empty states for no project, no build, and no receipt. Native UI interaction is blocked in this agent environment; Unreal build/runtime verification is also pending and must use a disposable test project.
 - Prioritize that manual UI checklist, then a disposable Unreal validation of package cancellation, existing-version collision protection, and archive/no-archive reporting. Defer additional feature work until those checks pass.
+- For handoff validation, package a disposable Unreal project and confirm `build-handoff.md` appears only beside a verified ZIP, its recorded SHA-256 matches the ZIP after copying, and **Copy test handoff** puts the same Markdown on the clipboard. Also verify failed/cancelled builds do not get a handoff note.

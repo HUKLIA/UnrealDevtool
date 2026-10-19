@@ -112,7 +112,7 @@ pub fn ensure_space_free_alias(target: &Path) -> Result<PathBuf, String> {
 // ── PC setup checks ───────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CheckStatus { Ok, Warn, Fail }
+pub enum CheckStatus { Ok, Warn, Fail, Unknown }
 
 #[derive(Clone)]
 pub struct CheckItem {

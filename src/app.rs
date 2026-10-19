@@ -2,6 +2,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+
+fn doctor_result_is_current(
+    result_generation: u64,
+    current_generation: u64,
+    result_path: &std::path::Path,
+    result_target: BuildTarget,
+    selected: Option<(&std::path::Path, BuildTarget)>,
+) -> bool {
+    result_generation == current_generation
+        && selected.is_some_and(|(path, target)| path == result_path && target == result_target)
+}
 use std::time::Instant;
 
 use eframe::egui;
@@ -180,6 +191,10 @@ pub struct DevToolApp {
     pub schedule_input: String,
     /// Result of `ops::doctor::check_project`, refreshed on the slow poll.
     pub doctor_items: Vec<crate::ops::preflight::CheckItem>,
+    pub doctor_pending: Arc<Mutex<Option<(u64, PathBuf, BuildTarget, Vec<crate::ops::preflight::CheckItem>)>>>,
+    pub doctor_context: Option<(PathBuf, BuildTarget)>,
+    pub doctor_scanning: bool,
+    pub doctor_generation: u64,
     /// One-click fixes for what `doctor_items` found. Computed when the checks
     /// sheet opens, not every poll: finding maps walks the Content folder.
     pub doctor_fixes: Vec<crate::ops::doctor::Fix>,
@@ -472,6 +487,10 @@ impl DevToolApp {
             schedule: None,
             schedule_input: String::new(),
             doctor_items: Vec::new(),
+            doctor_pending: Arc::new(Mutex::new(None)),
+            doctor_context: None,
+            doctor_scanning: false,
+            doctor_generation: 0,
             doctor_fixes: Vec::new(),
             monitor: None,
             monitor_filter: crate::types::LogFilter::All,
@@ -917,10 +936,34 @@ impl DevToolApp {
     /// Re-reads the project's config for packaging-readiness problems. A few
     /// small files, so it runs inline.
     pub fn refresh_doctor(&mut self) {
-        self.doctor_items = match &self.project_path {
-            Some(p) => crate::ops::doctor::check_project(p, self.build_target),
-            None    => Vec::new(),
+        if let Some((generation, path, target, items)) = self.doctor_pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.doctor_scanning = false;
+            let selected = self.project_path.as_deref().map(|p| (p, self.build_target));
+            if doctor_result_is_current(generation, self.doctor_generation, &path, target, selected) {
+                self.doctor_items = items;
+                self.doctor_context = Some((path, target));
+            }
+        }
+        let Some(path) = self.project_path.clone() else {
+            self.doctor_items.clear(); self.doctor_context = None; self.doctor_scanning = false; return;
         };
+        if self.doctor_scanning { return; }
+        let target = self.build_target;
+        let key = (path.clone(), target);
+        if self.doctor_context.as_ref() == Some(&key) { return; }
+        if self.doctor_pending.lock().unwrap_or_else(|e| e.into_inner()).is_some() { return; }
+        self.doctor_generation = self.doctor_generation.wrapping_add(1);
+        let generation = self.doctor_generation;
+        self.doctor_context = None;
+        self.doctor_items.clear();
+        self.doctor_scanning = true;
+        let pending = Arc::clone(&self.doctor_pending);
+        let ctx = self.egui_ctx.clone();
+        thread::spawn(move || {
+            let items = crate::ops::doctor::check_project(&path, target);
+            *pending.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, path, target, items));
+            ctx.request_repaint();
+        });
     }
 
     /// Recomputes the one-click fixes (see `doctor_fixes`).
@@ -1938,5 +1981,16 @@ mod package_result_lifecycle_tests {
         )));
         reset_package_result_pending(&slot);
         assert!(slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn readiness_results_require_matching_generation_path_and_target() {
+        let a = std::path::Path::new("A/Game.uproject");
+        let b = std::path::Path::new("B/Game.uproject");
+        assert!(doctor_result_is_current(7, 7, a, BuildTarget::Win64, Some((a, BuildTarget::Win64))));
+        assert!(!doctor_result_is_current(7, 7, a, BuildTarget::Win64, Some((b, BuildTarget::Win64))));
+        assert!(!doctor_result_is_current(7, 7, a, BuildTarget::Win64, Some((a, BuildTarget::Android))));
+        // A -> B -> A has the same final path but a newer scan generation.
+        assert!(!doctor_result_is_current(7, 9, a, BuildTarget::Win64, Some((a, BuildTarget::Win64))));
     }
 }

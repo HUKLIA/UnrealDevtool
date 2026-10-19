@@ -54,6 +54,7 @@ impl DevToolApp {
             CheckStatus::Ok   => ("OK",   accent()),
             CheckStatus::Warn => ("WARN", AMBER),
             CheckStatus::Fail => ("FAIL", RED),
+            CheckStatus::Unknown => ("UNKNOWN", AMBER),
         };
         // Extra left margin leaves room for the colored rule painted after
         // the frame closes (once its final `rect` is known) without needing

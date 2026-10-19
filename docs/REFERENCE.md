@@ -39,7 +39,7 @@ The pipeline fills from UAT's own stage banners, not a timer. The log is coloure
 
 ![The Finished screen: Build complete, size, warnings and errors, the zip's path, and Open folder, Upload to Drive and Build again actions](images/done.png)
 
-You get the size, warnings, errors, the artifact path (with **Copy**), and per-stage timing. **Open build log** and **Copy report** are always there, and **Run this build** starts a packaged Windows game. Under *Ship it*, **Then set up a build for…** switches the same project to another platform in one click.
+You get the size, warnings, errors, the artifact path (with **Copy**), and per-stage timing. **Open build log** and **Copy report** are always there, and **Run this build** starts a packaged Windows game. For a successful package, **Copy test handoff** copies the `build-handoff.md` note saved beside the zip. It contains the exact archive SHA-256 and size plus a short tester checklist. The hash identifies the file after transfer; it does not confirm that the game runs or plays correctly. Under *Ship it*, **Then set up a build for…** switches the same project to another platform in one click.
 
 ### 3b. Failed — see why, right here
 
@@ -161,6 +161,7 @@ A finished build tells you what happened without opening a log:
 - The result records **succeeded**, **failed**, or **cancelled** from the packaging operation. ZIP creation and ZIP verification are separate states; only a verified ZIP is offered to run, upload, or reveal.
 - **Failed builds** show *What went wrong*: the recognised cause and its fix when the log matches a known signature, plus the first error lines UAT printed. Nothing is offered to ship; you get *Try again* and *Project checks*.
 - **Open build log** and **Copy report** (project, version, platform, configuration, per-stage timing, causes, first errors) are on every result.
+- A successful verified ZIP gets a `build-handoff.md` beside it, with project/build identity, target, configuration, method, archive size and SHA-256, and a tester checklist. The note is written only after ZIP integrity verification succeeds. Its checksum confirms artifact identity after transfer; it does not certify launch, install or gameplay.
 - **The taskbar flashes** when a build finishes while the window is in the background.
 - **Install on a phone** (Android builds): finds `adb` in the Android SDK's platform-tools, lists connected devices, and installs the built `.apk` with `adb install -r`. It says so plainly when `adb`, a device or the `.apk` is missing, or when the phone has not accepted the USB-debugging prompt.
 - **Size budget** (*Advanced*): set the most a package should weigh; a build over it is flagged amber on the result with how far over it is.

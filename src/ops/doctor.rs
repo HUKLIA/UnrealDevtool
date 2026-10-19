@@ -22,12 +22,28 @@ pub fn check_project(project: &Path, target: BuildTarget) -> Vec<CheckItem> {
     let mut out = Vec::new();
 
     // The project file itself.
-    let descriptor = std::fs::read_to_string(project)
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    const MAX_PROJECT_BYTES: u64 = 4 * 1024 * 1024;
+    let descriptor_text = match std::fs::metadata(project) {
+        Ok(m) if m.len() > MAX_PROJECT_BYTES => {
+            out.push(item(CheckStatus::Unknown, "Project file", "The descriptor exceeds the 4 MiB scan limit; review it in Unreal Editor."));
+            return out;
+        }
+        Ok(_) => match std::fs::read_to_string(project) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                out.push(item(CheckStatus::Unknown, "Project file", format!("Could not read the descriptor ({e}); check file access and rescan.")));
+                return out;
+            }
+        },
+        Err(e) => {
+            out.push(item(CheckStatus::Unknown, "Project file", format!("Could not inspect the descriptor ({e}); check the selected path and rescan.")));
+            return out;
+        }
+    };
+    let descriptor = descriptor_text.as_deref().and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok());
     let Some(desc) = descriptor else {
         out.push(item(CheckStatus::Fail, "Project file",
-            "The .uproject could not be read as JSON. Unreal will not open it either."));
+            "The .uproject is not valid JSON. Open the file in a text editor, repair it, then rescan."));
         return out;
     };
 
@@ -390,6 +406,28 @@ mod tests {
         let out = check_project(&file, BuildTarget::Win64);
         assert_eq!(out.len(), 1);
         assert!(matches!(out[0].status, CheckStatus::Fail));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_descriptor_is_unknown_with_recovery_guidance() {
+        let (root, file) = project("oversized", "{}");
+        let f = std::fs::File::create(&file).unwrap();
+        f.set_len(4 * 1024 * 1024 + 1).unwrap();
+        let out = check_project(&file, BuildTarget::Win64);
+        assert!(matches!(out[0].status, CheckStatus::Unknown));
+        assert!(out[0].detail.contains("4 MiB") && out[0].detail.contains("review"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_descriptor_is_unknown_while_malformed_json_is_a_failure() {
+        let root = std::env::temp_dir().join(format!("udt-doctor-unreadable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let out = check_project(&root, BuildTarget::Win64);
+        assert!(matches!(out[0].status, CheckStatus::Unknown));
+        assert!(out[0].detail.contains("Could not read"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -41,6 +41,7 @@ Make Unreal packaging **simple and calm** for one person or a small team:
 | **Monitor your project** | Live view of Unreal processes, the editor log, crashes, and folder sizes. |
 | **Run Unreal tools** | Compile all Blueprints, validate data, launch the editor or game with flags, see what makes the package big, switch plugins and engine versions. |
 | **Playtest** | Launch the editor, a standalone game, or the latest Windows package. Save launch settings as named presets for repeatable reviews, then draft a local issue report from a launch receipt or saved build. |
+| **Hand off a build** | Successful packages get a `build-handoff.md` beside the zip with its SHA-256, size, target and a short tester checklist. Copy the handoff from the finished-build screen; the checksum identifies the archive but does not certify gameplay. |
 | **Ship it** | Open the folder, upload with rclone, install on an Android phone, copy release notes from your git history. |
 | **Do things by typing** | Press `Ctrl+K` to search every action. Press `F1` for a guided tour. |
 
