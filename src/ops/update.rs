@@ -15,6 +15,18 @@ const ASSET_NAME: &str = "unreal_devtool.exe";
 /// `.github/workflows/release.yml`.
 const CHECKSUM_ASSET_NAME: &str = "unreal_devtool.exe.sha256";
 
+/// Largest download the updater will accept. The real exe is a few tens of
+/// MB; anything far beyond that is not a release we published.
+const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
+
+/// True only for assets attached to this repository's own releases. The
+/// release JSON is trusted for metadata, but the updater never follows an
+/// asset URL that points anywhere else.
+fn is_release_asset_url(url: &str) -> bool {
+    url.starts_with(&format!("https://github.com/{REPO}/releases/download/"))
+        && !url.contains("..")
+}
+
 #[derive(Deserialize)]
 struct ReleaseAsset {
     name: String,
@@ -79,10 +91,14 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
 
     let asset = info.assets.iter().find(|a| a.name == ASSET_NAME)
         .ok_or("latest release has no exe asset")?;
+    if !is_release_asset_url(&asset.browser_download_url) {
+        return Err("release asset is not hosted on this repository's releases".into());
+    }
 
     let checksum_url = info.assets.iter()
         .find(|a| a.name == CHECKSUM_ASSET_NAME)
-        .map(|a| a.browser_download_url.clone());
+        .map(|a| a.browser_download_url.clone())
+        .filter(|u| is_release_asset_url(u));
 
     Ok(Some(UpdateInfo {
         version:      info.tag_name,
@@ -165,6 +181,9 @@ pub fn download_and_install(
     if checksum_url.is_none() {
         return Err("Release has no checksum. Automatic update refused; use the release page to review a manual download.".into());
     }
+    if !is_release_asset_url(download_url) || !checksum_url.is_some_and(is_release_asset_url) {
+        return Err("Update refused: download is not hosted on this repository's releases.".into());
+    }
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = current_exe.parent().ok_or("could not resolve install directory")?;
 
@@ -191,6 +210,9 @@ pub fn download_and_install(
     let total = resp.header("Content-Length")
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
+    if total > MAX_DOWNLOAD_BYTES {
+        return Err("Update refused: download is larger than any published release.".into());
+    }
 
     let mut reader = resp.into_reader();
     let mut file = std::fs::File::create(&new_path).map_err(|e| e.to_string())?;
@@ -208,6 +230,11 @@ pub fn download_and_install(
         file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
         hasher.update(&buf[..n]);
         downloaded += n as u64;
+        if downloaded > MAX_DOWNLOAD_BYTES {
+            drop(file);
+            let _ = std::fs::remove_file(&new_path);
+            return Err("Update refused: download is larger than any published release.".into());
+        }
         if total > 0 {
             *progress.lock().unwrap_or_else(|e| e.into_inner()) =
                 (downloaded as f32 / total as f32).min(1.0);
@@ -312,6 +339,19 @@ mod security_tests {
         let result = download_and_install("invalid-url", None, &status, &cancel, &progress);
         assert!(result.unwrap_err().contains("no checksum"));
         assert_eq!(*status.lock().unwrap(), "unchanged");
+    }
+    #[test]
+    fn only_this_repositorys_release_assets_are_downloaded() {
+        assert!(is_release_asset_url("https://github.com/HUKLIA/UnrealDevtool/releases/download/v1.0.5/unreal_devtool.exe"));
+        assert!(!is_release_asset_url("https://evil.example/unreal_devtool.exe"));
+        assert!(!is_release_asset_url("https://github.com/someone/else/releases/download/v1/unreal_devtool.exe"));
+        assert!(!is_release_asset_url("http://github.com/HUKLIA/UnrealDevtool/releases/download/v1/x.exe"));
+        assert!(!is_release_asset_url("https://github.com/HUKLIA/UnrealDevtool/releases/download/../../../x"));
+        let status = Arc::new(Mutex::new(String::new()));
+        let result = download_and_install("https://evil.example/a.exe",
+            Some("https://evil.example/a.sha256"), &status,
+            &Arc::new(AtomicBool::new(false)), &Arc::new(Mutex::new(0.0)));
+        assert!(result.unwrap_err().contains("not hosted"));
     }
 }
 

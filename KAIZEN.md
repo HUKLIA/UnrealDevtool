@@ -75,8 +75,14 @@ Evidence comes from the read-only product audit and local implementation in this
 - User benefit: fewer surprise security prompts and clearer claims about what works.
 - Acceptance: stable/manual release gate with provenance and regression evidence; tested engine/platform matrix; review third-party asset redistribution before changing bundled assets or license claims.
 
+### Supply-chain and command-injection hardening — DONE
+- Evidence: `cargo audit` reported 15 advisories (rustls, rustls-webpki, webpki-roots, zip path/symlink extraction, crossbeam-epoch, webbrowser, quick-xml); `open_url` passed config-supplied custom links to `cmd /c start`; the updater followed any asset URL in the release JSON with no size cap; CI actions were tag-pinned and the release build was not `--locked`.
+- Done: dependencies updated, `zip` 8 -> 9; only quick-xml remains, used solely by Linux accessibility crates not built for Windows. `open_url` allows only http(s)/ms-settings links with no cmd metacharacters. Updater downloads only from `github.com/HUKLIA/UnrealDevtool/releases/download/` and refuses files over 256 MB. Workflow actions pinned to commit SHAs, release build `--locked`, and a `cargo audit` gate added.
+- Remaining: the `.sha256` comes from the same release, so it proves integrity, not publisher identity. Authenticode signing (secrets already supported) is the real fix.
+
 ## Verified this increment
 - Previous increment: `cargo test --locked`: 99 passed, 0 failed, 2 ignored.
-- Current increment: `cargo test --locked` passed (121 passed, 0 failed, 2 ignored); `cargo build --locked` passed; `git diff --check` passed with CRLF/LF advisory warnings. Handoff tests verify the SHA-256 of known bytes, streamed byte count, no local path disclosure, honest tester wording, Markdown escaping and create-new overwrite protection. UI copy behavior and a real Unreal build remain unverified.
+- Security increment: `cargo test --locked` 126 passed, 0 failed, 2 ignored; `cargo build --release --locked` passed; `cargo audit` (quick-xml ignored) clean.
+- Earlier increment: `cargo test --locked` passed (121 passed, 0 failed, 2 ignored); `cargo build --locked` passed; `git diff --check` passed with CRLF/LF advisory warnings. Handoff tests verify the SHA-256 of known bytes, streamed byte count, no local path disclosure, honest tester wording, Markdown escaping and create-new overwrite protection. UI copy behavior and a real Unreal build remain unverified.
 - `cargo fmt --check` was blocked in the previous increment because Windows Application Control blocked `cargo-fmt` (OS error 4551); this increment will not retry it.
 - 55 existing `f32` fallback warnings remain. Debug binary: `C:\Users\Public\Repo\UnrealDevtool\target\debug\unreal_devtool.exe`.

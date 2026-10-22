@@ -15,7 +15,7 @@ ureq    = { version = "2.10", features = ["json", "tls"] } # GitHub release chec
 serde   = { version = "1", features = ["derive"] }          # Parse GitHub release JSON
 serde_json = { version = "1", features = ["preserve_order"] }                                             # Stream/parse Ollama & LM Studio chat chunks
 sha2    = "0.10"                                 # Verify the self-update download against its published checksum
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 winresource = "0.1"                              # Embed Windows version info + manifest + icon (see build.rs)
