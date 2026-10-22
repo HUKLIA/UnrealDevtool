@@ -182,8 +182,8 @@ fn decode_log(bytes: &[u8]) -> Result<String, String> {
     let be = bytes.starts_with(&[0xfe, 0xff]);
     if le || be {
         let bytes = &bytes[2..];
-        if bytes.len() % 2 != 0 { return Err("Incomplete UTF-16 log: odd byte count.".into()); }
-        let units: Vec<_> = bytes.chunks_exact(2).map(|p| {
+        if !bytes.len().is_multiple_of(2) { return Err("Incomplete UTF-16 log: odd byte count.".into()); }
+        let units: Vec<_> = bytes.as_chunks::<2>().0.iter().map(|p| {
             if le { u16::from_le_bytes([p[0], p[1]]) } else { u16::from_be_bytes([p[0], p[1]]) }
         }).collect();
         String::from_utf16(&units).map_err(|e| format!("Invalid UTF-16 log: {e}"))

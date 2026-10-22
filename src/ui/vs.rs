@@ -8,7 +8,7 @@ impl DevToolApp {
         let mut do_start = false;
 
         card()
-            .stroke(egui::Stroke::new(1.0, acc(110)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(110)))
             .show(ui, |ui| {
                 ui.label(heading("Rebuild Project Files", 15.0));
                 ui.add_space(8.0);

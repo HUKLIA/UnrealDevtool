@@ -6,7 +6,7 @@
 #   sudo apt update && sudo apt install -y build-essential gcc-mingw-w64-x86-64
 #   rustup target add x86_64-pc-windows-gnu
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"

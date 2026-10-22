@@ -135,7 +135,7 @@ impl DevToolApp {
                         .color(if selected { TEXT } else { SOFT }),
                 )
                 .fill(if selected { WELL } else { egui::Color32::TRANSPARENT })
-                .stroke(egui::Stroke::new(1.0, if selected { accent() } else { LINE }));
+                .stroke(egui::Stroke::new(1.0_f32, if selected { accent() } else { LINE }));
                 if ui.add_sized([ui.available_width(), 30.0], btn).clicked() {
                     self.chat_provider = Some(*p);
                     self.chat_model    = models.first().cloned().unwrap_or_default();

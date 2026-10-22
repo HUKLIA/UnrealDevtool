@@ -547,7 +547,7 @@ impl DevToolApp {
         drop(run);
 
         section()
-            .stroke(egui::Stroke::new(1.0, acc(56)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(56)))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal_top(|ui| {
@@ -660,7 +660,7 @@ impl DevToolApp {
             _ => RED,
         };
         section()
-            .stroke(egui::Stroke::new(1.0, tint(ok_color, 62)))
+            .stroke(egui::Stroke::new(1.0_f32, tint(ok_color, 62)))
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     let (mark, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
@@ -1006,7 +1006,7 @@ impl DevToolApp {
     /// either way.
     fn show_failure_summary(&self, ui: &mut egui::Ui, out: &crate::types::BuildOutcome) {
         section()
-            .stroke(egui::Stroke::new(1.0, tint(RED, 62)))
+            .stroke(egui::Stroke::new(1.0_f32, tint(RED, 62)))
             .inner_margin(egui::Margin::symmetric(24.0, 20.0))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
@@ -1131,7 +1131,7 @@ fn ship_button(ui: &mut egui::Ui, icon: Icon, title: &str, sub: &str, primary_st
     };
     let p = ui.painter();
     p.rect_filled(rect, egui::Rounding::same(13.0), fill);
-    p.rect_stroke(rect, egui::Rounding::same(13.0), egui::Stroke::new(1.0, stroke));
+    p.rect_stroke(rect, egui::Rounding::same(13.0), egui::Stroke::new(1.0_f32, stroke));
 
     let icon_c = if primary_style { title_c } else { SOFT };
     paint_icon(p, rect.left_center() + egui::vec2(24.0, 0.0), icon, icon_c);
@@ -1174,5 +1174,5 @@ fn stage_columns(
 pub fn divider(ui: &mut egui::Ui) {
     let w = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, LINE));
+    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0_f32, LINE));
 }

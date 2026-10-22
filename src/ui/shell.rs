@@ -36,7 +36,7 @@ impl DevToolApp {
     pub fn show_topbar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, egui::Rounding::ZERO, topbar_background());
-        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, LINE));
+        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0_f32, LINE));
 
         let (left_rect, right_rect) = topbar_rects(rect);
         let left_w = left_rect.width();
@@ -237,7 +237,7 @@ impl DevToolApp {
 
         egui::Frame::none()
             .fill(surface_card())
-            .stroke(egui::Stroke::new(1.0, surface_line()))
+            .stroke(egui::Stroke::new(1.0_f32, surface_line()))
             .rounding(egui::Rounding::same(20.0))
             .inner_margin(egui::Margin::ZERO)
             .show(&mut area_ui, |ui| {
@@ -262,7 +262,7 @@ impl DevToolApp {
                     ui.painter().hline(
                         line.x_range().shrink(0.0),
                         ui.min_rect().bottom(),
-                        egui::Stroke::new(1.0, LINE_SOFT),
+                        egui::Stroke::new(1.0_f32, LINE_SOFT),
                     );
                     ui.add_space(6.0);
 

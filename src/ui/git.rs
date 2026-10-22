@@ -354,7 +354,7 @@ impl DevToolApp {
 
     fn git_frame() -> egui::Frame {
         card()
-            .stroke(egui::Stroke::new(1.0, acc(110)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(110)))
     }
 
     fn code_block() -> egui::Frame {

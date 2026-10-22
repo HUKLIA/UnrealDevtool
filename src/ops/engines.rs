@@ -117,7 +117,7 @@ mod tests {
         std::fs::create_dir_all(root.join("UE_broken")).unwrap(); // no RunUAT: not an engine
         std::fs::create_dir_all(root.join("Other")).unwrap();
 
-        let found: Vec<EngineInstall> = list(&[e56.clone()]).into_iter()
+        let found: Vec<EngineInstall> = list(std::slice::from_ref(&e56)).into_iter()
             .filter(|e| e.dir.starts_with(&root)).collect();
         assert_eq!(found.len(), 3, "{found:?}");
         assert_eq!(found[0].version, "5.7.0");

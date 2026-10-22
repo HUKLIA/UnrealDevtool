@@ -162,11 +162,10 @@ fn project_settings_file_for_load(project_path: &Path, kind: &str) -> Option<Pat
 fn project_settings_file_for_load_in(dir: &Path, project_path: &Path, kind: &str) -> Option<PathBuf> {
     let current = project_settings_file_in(dir, project_path, kind)?;
     if current.is_file() { return Some(current); }
-    if let Some(legacy) = legacy_project_settings_file_in(dir, project_path, kind).filter(|p| p.is_file()) {
-        if fs::rename(&legacy, &current).is_ok() {
+    if let Some(legacy) = legacy_project_settings_file_in(dir, project_path, kind).filter(|p| p.is_file())
+        && fs::rename(&legacy, &current).is_ok() {
             return Some(current);
         }
-    }
     // A failed migration must never fall back to a stem-only file: another
     // project with the same name could otherwise read the first project's
     // settings.

@@ -732,8 +732,13 @@ pub fn open_rclone_config_setup() -> std::io::Result<()> {
             "rclone is not installed yet",
         ));
     };
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "rclone config — set up the \"gdrive\" remote", &program, "config"])
+    // Own console window (rclone config is interactive), started directly so
+    // the rclone path is never parsed by cmd.
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+    std::process::Command::new(&program)
+        .arg("config")
+        .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()?;
     Ok(())
 }

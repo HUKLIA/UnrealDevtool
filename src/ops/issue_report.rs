@@ -178,7 +178,7 @@ fn nonempty(value: &str) -> &str {
 fn markdown_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('|', "\\|").replace('*', "\\*")
         .replace('_', "\\_").replace('[', "\\[").replace(']', "\\]")
-        .replace('`', "\\`").replace('\r', " ").replace('\n', " ")
+        .replace('`', "\\`").replace(['\r', '\n'], " ")
 }
 
 fn markdown_code_span(value: &str) -> String {

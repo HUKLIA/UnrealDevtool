@@ -7,6 +7,16 @@ use crate::types::GitTaskStatus;
 
 // ── Low-level git helpers ─────────────────────────────────────────────────────
 
+/// True if `name` is a plain branch name. git is spawned directly (no shell),
+/// but a name like `--upload-pack=evil` would still be read as an option, so
+/// anything starting with `-` or outside git's ref rules is refused.
+pub fn is_safe_branch_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 200
+        && !name.starts_with('-') && !name.starts_with('/') && !name.ends_with('/')
+        && !name.ends_with(".lock") && !name.contains("..") && !name.contains("@{")
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
+}
+
 pub fn run_git(dir: &Path, args: &[&str]) -> (bool, String) {
     if crate::config::offline_mode() && git_command_needs_network(args) {
         return (false, "Git network operations are disabled while UDT_OFFLINE=1.".into());
@@ -324,6 +334,10 @@ pub fn task_git_commit_push(
     }
 
     check!(); prog!(0.55);
+    if !is_safe_branch_name(&branch) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return format!("[ERROR] \"{}\" is not a valid branch name.", branch);
+    }
     upd!(format!("[3/3] Pushing commit to origin/{}…", branch));
     let (ok, out) = run_git(&dir, &["push", "-u", "origin", &branch]);
     if !ok {
@@ -416,6 +430,10 @@ pub fn task_git_merge_to_main(
     }
 
     check!(); prog!(0.55);
+    if !is_safe_branch_name(&from_branch) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return format!("[ERROR] \"{}\" is not a valid branch name.", from_branch);
+    }
     upd!(format!("[3/4] Merging {} -> main…", from_branch));
     let (ok, out) = run_git(&dir, &["merge", &from_branch]);
     if !ok {
@@ -456,6 +474,10 @@ pub fn task_git_checkout(
         return "[CANCELLED] Git operation was cancelled.".to_string();
     }
     *progress.lock().unwrap() = 0.3;
+    if !is_safe_branch_name(&branch) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return format!("[ERROR] \"{}\" is not a valid branch name.", branch);
+    }
     *status.lock().unwrap() = format!("Switching to {}…", branch);
     let (ok, out) = run_git(&dir, &["checkout", &branch]);
     if !ok {
@@ -480,6 +502,10 @@ pub fn task_git_create_branch(
         return "[CANCELLED] Git operation was cancelled.".to_string();
     }
     *progress.lock().unwrap() = 0.3;
+    if !is_safe_branch_name(&name) {
+        *result.lock().unwrap() = Some(GitTaskStatus::Error);
+        return format!("[ERROR] \"{}\" is not a valid branch name.", name);
+    }
     *status.lock().unwrap() = format!("Creating branch {}…", name);
     let (ok, out) = run_git(&dir, &["checkout", "-b", &name]);
     if !ok {
@@ -546,5 +572,17 @@ mod release_notes_tests {
         for args in [vec!["status"], vec!["branch", "--show-current"], vec!["commit", "-m", "test"]] {
             assert!(!git_command_needs_network(&args));
         }
+    }
+
+    #[test]
+    fn branch_names_that_git_would_read_as_options_are_refused() {
+        assert!(is_safe_branch_name("main"));
+        assert!(is_safe_branch_name("feature/new-ui_2"));
+        assert!(!is_safe_branch_name("--upload-pack=calc"));
+        assert!(!is_safe_branch_name("-b"));
+        assert!(!is_safe_branch_name("a..b"));
+        assert!(!is_safe_branch_name("a b"));
+        assert!(!is_safe_branch_name("x;rm"));
+        assert!(!is_safe_branch_name(""));
     }
 }

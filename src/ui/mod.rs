@@ -137,7 +137,7 @@ impl eframe::App for DevToolApp {
             let card = egui::Rect::from_center_size(screen.center(), egui::vec2(360.0, 110.0)
                 .min(screen.size() - egui::vec2(32.0, 32.0)));
             painter.rect(card, egui::Rounding::same(R_SECTION), CARD,
-                egui::Stroke::new(1.5, accent()));
+                egui::Stroke::new(1.5_f32, accent()));
             painter.text(card.center() - egui::vec2(0.0, 10.0), egui::Align2::CENTER_CENTER,
                 "Drop to open project", display(18.0), TEXT);
             painter.text(card.center() + egui::vec2(0.0, 16.0), egui::Align2::CENTER_CENTER,
@@ -480,10 +480,9 @@ impl DevToolApp {
                     self.upload_use_gdrive = false;
                     self.gdrive_remote_status = None;
                     self.pending_open_folder_path = folder.to_path_buf();
-            } else if succeeded {
-                if let Some(folder) = version_dir.filter(|p| p.is_dir()) {
+            } else if succeeded
+                && let Some(folder) = version_dir.filter(|p| p.is_dir()) {
                     self.pending_open_folder_path = folder;
-                }
                 }
         }
 

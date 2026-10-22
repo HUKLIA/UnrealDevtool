@@ -57,7 +57,7 @@ impl DevToolApp {
                 let gif_size = ui.available_width().clamp(180.0, 420.0);
                 well()
                     .fill(surface_deep())
-                    .stroke(egui::Stroke::new(1.0, acc(90)))
+                    .stroke(egui::Stroke::new(1.0_f32, acc(90)))
                     .show(ui, |ui| {
                         if let Some(gif) = &self.gif_player {
                             gif.show(ui, egui::vec2(gif_size, gif_size));
@@ -204,7 +204,7 @@ impl DevToolApp {
                     // repeat that mistake since the size isn't a hint.
                     let w = ui.available_width();
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
-                    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, LINE));
+                    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0_f32, LINE));
                     ui.add_space(6.0);
                 }
             }

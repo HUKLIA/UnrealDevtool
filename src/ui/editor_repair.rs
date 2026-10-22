@@ -77,12 +77,11 @@ impl DevToolApp {
         ui.horizontal_wrapped(|ui| {
             if ui.button("Scan again").clicked() { self.refresh_editor_repair(); }
             if ui.button("Choose project / engine").clicked() { self.open_sheet(crate::types::Sheet::Diagnostics); }
-            if ui.button("Copy diagnosis").clicked() {
-                if let Some(scan) = &self.tools.repair.inspection {
+            if ui.button("Copy diagnosis").clicked()
+                && let Some(scan) = &self.tools.repair.inspection {
                     let report = scan.items.iter().map(|i| format!("{}: {}", i.label, i.detail)).collect::<Vec<_>>().join("\n");
                     ui.ctx().copy_text(format!("Unreal DevTool {} editor startup diagnosis\n{report}\nReview local paths before sharing.", env!("CARGO_PKG_VERSION")));
                 }
-            }
         });
         if let Some(scan) = &self.tools.repair.inspection {
             for item in &scan.items {
@@ -114,12 +113,11 @@ impl DevToolApp {
             ui.label(hint("Registers a handler for this Windows user only. This affects .uproject files for this user; it does not change project EngineAssociation values or require administrator rights."));
             if let Some(path) = &self.tools.repair.selector { ui.monospace(path.display().to_string()); }
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Locate UnrealVersionSelector...").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("Epic selector", &["exe"]).pick_file() {
+                if ui.button("Locate UnrealVersionSelector...").clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("Epic selector", &["exe"]).pick_file() {
                         if repair::valid_selector(&path) { self.tools.repair.selector = Some(path); }
                         else { self.tools.repair.notice = "Choose Epic's original UnrealVersionSelector.exe, not the editor or a copied/downloaded replacement.".into(); }
                     }
-                }
                 if ui.add_enabled(self.tools.repair.selector.is_some(), egui::Button::new("Preview Windows repair")).clicked() {
                     match repair::plan_association(self.tools.repair.selector.as_ref().unwrap()) {
                         Ok(plan) => self.tools.repair.set_preview(Preview::Association(plan)),
@@ -159,18 +157,16 @@ impl DevToolApp {
         });
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            if let Some(undo) = &self.tools.repair.undo {
-                if ui.button("Preview undo last settings repair").clicked() {
+            if let Some(undo) = &self.tools.repair.undo
+                && ui.button("Preview undo last settings repair").clicked() {
                     self.tools
                         .repair
                         .set_preview(Preview::RestoreFile(undo.clone()));
                 }
-            }
-            if let Some(path) = &self.tools.repair.association_backup {
-                if ui.button("Preview undo Windows repair").clicked() {
+            if let Some(path) = &self.tools.repair.association_backup
+                && ui.button("Preview undo Windows repair").clicked() {
                     self.preview_association_restore(path.clone());
                 }
-            }
             if ui.button("Restore Windows repair from backup...").clicked() {
                 let mut dialog = rfd::FileDialog::new().add_filter("Association backup", &["json"]);
                 if let Some(dir) = crate::config::config_dir() {
@@ -208,7 +204,7 @@ impl DevToolApp {
                 }
                 Preview::Association(p) => {
                     ui.label("Writes only the listed HKCU values. A JSON backup is saved under UnrealDevTool/repairs first. Restore will refuse if these values change later.");
-                    for c in &p.changes { ui.monospace(format!("{}\n  {:?} -> {}", format!("{} [value: {}]", c.path, if repair::registry_value_name(&c.path).is_empty() { "(Default)" } else { repair::registry_value_name(&c.path) }), c.before, c.after)); }
+                    for c in &p.changes { let value = match repair::registry_value_name(&c.path) { "" => "(Default)", v => v }; ui.monospace(format!("{} [value: {}]\n  {:?} -> {}", c.path, value, c.before, c.after)); }
                 }
                 Preview::RestoreFile(u) => { ui.label("Restore the pre-repair contents. Refuses if the file or backup changed since this repair."); ui.monospace(u.backup.display().to_string()); }
                 Preview::RestoreAssociation(p, plan) => { ui.label("Restore the association values recorded in this backup. Unexpected paths and changed current values are refused. Empty registry keys may remain."); ui.monospace(p.display().to_string()); for c in &plan.changes { ui.monospace(format!("{} [value: {}]\n  {} -> {:?}", c.path, repair::registry_value_name(&c.path), c.after, c.before)); } }

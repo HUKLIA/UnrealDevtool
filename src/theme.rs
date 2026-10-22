@@ -280,7 +280,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 pub fn section() -> egui::Frame {
     egui::Frame::none()
         .fill(surface_card())
-        .stroke(egui::Stroke::new(1.0, surface_line()))
+        .stroke(egui::Stroke::new(1.0_f32, surface_line()))
         .rounding(egui::Rounding::same(R_SECTION))
         .inner_margin(egui::Margin::symmetric(26.0, 24.0))
 }
@@ -289,7 +289,7 @@ pub fn section() -> egui::Frame {
 pub fn card() -> egui::Frame {
     egui::Frame::none()
         .fill(surface_card())
-        .stroke(egui::Stroke::new(1.0, surface_line()))
+        .stroke(egui::Stroke::new(1.0_f32, surface_line()))
         .rounding(egui::Rounding::same(R_CARD))
         .inner_margin(egui::Margin::symmetric(17.0, 16.0))
 }
@@ -298,7 +298,7 @@ pub fn card() -> egui::Frame {
 pub fn well() -> egui::Frame {
     egui::Frame::none()
         .fill(surface_well())
-        .stroke(egui::Stroke::new(1.0, surface_line()))
+        .stroke(egui::Stroke::new(1.0_f32, surface_line()))
         .rounding(egui::Rounding::same(12.0))
         .inner_margin(egui::Margin::symmetric(15.0, 13.0))
 }
@@ -307,7 +307,7 @@ pub fn well() -> egui::Frame {
 pub fn deep() -> egui::Frame {
     egui::Frame::none()
         .fill(surface_deep())
-        .stroke(egui::Stroke::new(1.0, surface_line_soft()))
+        .stroke(egui::Stroke::new(1.0_f32, surface_line_soft()))
         .rounding(egui::Rounding::same(R_CARD))
         .inner_margin(egui::Margin::symmetric(16.0, 12.0))
 }
@@ -316,7 +316,7 @@ pub fn deep() -> egui::Frame {
 pub fn callout(color: egui::Color32) -> egui::Frame {
     egui::Frame::none()
         .fill(tint(color, 11))
-        .stroke(egui::Stroke::new(1.0, tint(color, 44)))
+        .stroke(egui::Stroke::new(1.0_f32, tint(color, 44)))
         .rounding(egui::Rounding::same(12.0))
         .inner_margin(egui::Margin::symmetric(15.0, 12.0))
 }
@@ -361,7 +361,7 @@ pub fn dot(ui: &mut egui::Ui, color: egui::Color32, size: f32) {
 pub fn primary(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).font(body(14.0)).color(text_primary()))
         .fill(acc(34))
-        .stroke(egui::Stroke::new(1.0, acc(115)))
+        .stroke(egui::Stroke::new(1.0_f32, acc(115)))
         .rounding(egui::Rounding::same(13.0))
 }
 
@@ -369,7 +369,7 @@ pub fn primary(text: &str) -> egui::Button<'static> {
 pub fn ghost(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(text_soft()))
         .fill(surface_well())
-        .stroke(egui::Stroke::new(1.0, surface_line()))
+        .stroke(egui::Stroke::new(1.0_f32, surface_line()))
         .rounding(egui::Rounding::same(R_CTL))
 }
 
@@ -377,7 +377,7 @@ pub fn ghost(text: &str) -> egui::Button<'static> {
 pub fn quiet(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).font(body(12.0)).color(text_muted()))
         .fill(egui::Color32::TRANSPARENT)
-        .stroke(egui::Stroke::new(1.0, surface_line()))
+        .stroke(egui::Stroke::new(1.0_f32, surface_line()))
         .rounding(egui::Rounding::same(R_CTL))
 }
 
@@ -385,7 +385,7 @@ pub fn quiet(text: &str) -> egui::Button<'static> {
 pub fn danger(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).font(body(13.0)).color(RED))
         .fill(tint(RED, 20))
-        .stroke(egui::Stroke::new(1.0, tint(RED, 62)))
+        .stroke(egui::Stroke::new(1.0_f32, tint(RED, 62)))
         .rounding(egui::Rounding::same(12.0))
 }
 
@@ -394,12 +394,12 @@ pub fn chip(text: &str, active: bool) -> egui::Button<'static> {
     if active {
         egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(text_primary()))
             .fill(acc(26))
-            .stroke(egui::Stroke::new(1.0, acc(77)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(77)))
             .rounding(egui::Rounding::same(R_PILL))
     } else {
         egui::Button::new(egui::RichText::new(text).font(body(12.5)).color(text_soft()))
             .fill(surface_well())
-            .stroke(egui::Stroke::new(1.0, surface_line()))
+            .stroke(egui::Stroke::new(1.0_f32, surface_line()))
             .rounding(egui::Rounding::same(R_PILL))
     }
 }
@@ -459,7 +459,7 @@ pub enum Icon {
 
 /// Icons are stroked paths on a 16px box, centred on `c`.
 pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, kind: Icon, color: egui::Color32) {
-    let s = egui::Stroke::new(1.6, color);
+    let s = egui::Stroke::new(1.6_f32, color);
     let r = 7.0;
     match kind {
         Icon::Globe => {
@@ -520,21 +520,21 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, kind: Icon, color: egui::Col
             // An open-ended spanner: a diagonal shaft with a notched head.
             let a = c + egui::vec2(-r * 0.75, r * 0.75);
             let b = c + egui::vec2(r * 0.25, -r * 0.25);
-            p.line_segment([a, b], egui::Stroke::new(2.4, color));
+            p.line_segment([a, b], egui::Stroke::new(2.4_f32, color));
             p.circle_stroke(c + egui::vec2(r * 0.42, -r * 0.42), r * 0.45, s);
-            p.line_segment([c + egui::vec2(r * 0.42, -r * 0.42), c + egui::vec2(r * 0.85, -r * 0.85)], egui::Stroke::new(3.0, BG));
+            p.line_segment([c + egui::vec2(r * 0.42, -r * 0.42), c + egui::vec2(r * 0.85, -r * 0.85)], egui::Stroke::new(3.0_f32, BG));
         }
         Icon::Pulse => {
             // A heartbeat trace.
             let pts = [(-1.0, 0.0), (-0.45, 0.0), (-0.25, -0.75), (0.05, 0.85), (0.3, -0.2), (0.45, 0.0), (1.0, 0.0)];
             p.add(egui::Shape::line(
                 pts.iter().map(|(x, y)| c + egui::vec2(x * r, y * r * 0.9)).collect(),
-                egui::Stroke::new(1.6, color),
+                egui::Stroke::new(1.6_f32, color),
             ));
         }
         Icon::Cross => {
             let k = r * 0.55;
-            let st = egui::Stroke::new(2.0, color);
+            let st = egui::Stroke::new(2.0_f32, color);
             p.line_segment([c + egui::vec2(-k, -k), c + egui::vec2(k, k)], st);
             p.line_segment([c + egui::vec2(-k, k), c + egui::vec2(k, -k)], st);
         }
@@ -545,7 +545,7 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, kind: Icon, color: egui::Col
                     c + egui::vec2(-r * 0.15, r * 0.55),
                     c + egui::vec2(r * 0.75, -r * 0.6),
                 ],
-                egui::Stroke::new(2.0, color),
+                egui::Stroke::new(2.0_f32, color),
             ));
         }
         Icon::Help => {
@@ -579,7 +579,7 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, kind: Icon, color: egui::Col
                     c + egui::vec2(d * apex, 0.0),
                     c + egui::vec2(-d * tail, r * 0.7),
                 ],
-                egui::Stroke::new(2.0, color),
+                egui::Stroke::new(2.0_f32, color),
             ));
         }
         Icon::Reload => {
@@ -646,7 +646,7 @@ pub fn icon_ghost(ui: &mut egui::Ui, kind: Icon, size: egui::Vec2) -> egui::Resp
     let fill = mix(WELL, acc(30), hov);
     let stroke = mix(LINE, acc(110), hov);
     ui.painter().rect_filled(rect, egui::Rounding::same(R_CTL), fill);
-    ui.painter().rect_stroke(rect, egui::Rounding::same(R_CTL), egui::Stroke::new(1.0, stroke));
+    ui.painter().rect_stroke(rect, egui::Rounding::same(R_CTL), egui::Stroke::new(1.0_f32, stroke));
     paint_icon(ui.painter(), rect.center(), kind, mix(SOFT, TEXT, hov));
     if hov > 0.0 && hov < 1.0 { ui.ctx().request_repaint(); }
     resp
@@ -665,38 +665,38 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     let r = egui::Rounding::same(R_CTL);
     v.widgets.noninteractive.bg_fill   = surface_card();
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, surface_line());
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, if light { egui::Color32::from_rgb(71,85,105) } else { MUTED });
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, surface_line());
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, if light { egui::Color32::from_rgb(71,85,105) } else { MUTED });
     v.widgets.noninteractive.rounding  = r;
 
     v.widgets.inactive.bg_fill      = surface_well();
     v.widgets.inactive.weak_bg_fill = surface_well();
-    v.widgets.inactive.fg_stroke    = egui::Stroke::new(1.0, if light { egui::Color32::from_rgb(51,65,85) } else { SOFT });
-    v.widgets.inactive.bg_stroke    = egui::Stroke::new(1.0, surface_line());
+    v.widgets.inactive.fg_stroke    = egui::Stroke::new(1.0_f32, if light { egui::Color32::from_rgb(51,65,85) } else { SOFT });
+    v.widgets.inactive.bg_stroke    = egui::Stroke::new(1.0_f32, surface_line());
     v.widgets.inactive.rounding     = r;
 
     // Hover tints with the accent hue instead of swapping to a solid fill,
     // which is what used to make every button flash a bright teal slab.
     v.widgets.hovered.bg_fill      = acc(30);
     v.widgets.hovered.weak_bg_fill = acc(30);
-    v.widgets.hovered.fg_stroke    = egui::Stroke::new(1.0, TEXT);
-    v.widgets.hovered.bg_stroke    = egui::Stroke::new(1.0, acc(110));
+    v.widgets.hovered.fg_stroke    = egui::Stroke::new(1.0_f32, TEXT);
+    v.widgets.hovered.bg_stroke    = egui::Stroke::new(1.0_f32, acc(110));
     v.widgets.hovered.rounding     = r;
 
     v.widgets.active.bg_fill      = acc(56);
     v.widgets.active.weak_bg_fill = acc(56);
-    v.widgets.active.fg_stroke    = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    v.widgets.active.bg_stroke    = egui::Stroke::new(1.0, accent());
+    v.widgets.active.fg_stroke    = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
+    v.widgets.active.bg_stroke    = egui::Stroke::new(1.0_f32, accent());
     v.widgets.active.rounding     = r;
 
     v.widgets.open.bg_fill   = surface_well();
-    v.widgets.open.bg_stroke = egui::Stroke::new(1.0, acc(90));
+    v.widgets.open.bg_stroke = egui::Stroke::new(1.0_f32, acc(90));
     v.widgets.open.rounding  = r;
 
     v.selection.bg_fill = acc(70);
-    v.selection.stroke  = egui::Stroke::new(1.5, accent());
+    v.selection.stroke  = egui::Stroke::new(1.5_f32, accent());
 
-    v.window_stroke   = egui::Stroke::new(1.0, LINE);
+    v.window_stroke   = egui::Stroke::new(1.0_f32, LINE);
     v.window_rounding = egui::Rounding::same(R_CARD);
     v.window_fill     = surface_card();
     v.popup_shadow = egui::epaint::Shadow {
@@ -763,5 +763,5 @@ pub fn sparkline(ui: &mut egui::Ui, size: egui::Vec2, values: &std::collections:
     fill.push(egui::pos2(pts[n - 1].x, inner.bottom()));
     fill.push(egui::pos2(pts[0].x, inner.bottom()));
     p.add(egui::Shape::convex_polygon(fill, tint(color, 28), egui::Stroke::NONE));
-    p.add(egui::Shape::line(pts, egui::Stroke::new(1.5, color)));
+    p.add(egui::Shape::line(pts, egui::Stroke::new(1.5_f32, color)));
 }

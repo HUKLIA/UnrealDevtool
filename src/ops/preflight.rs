@@ -92,6 +92,10 @@ pub fn ensure_space_free_alias(target: &Path) -> Result<PathBuf, String> {
         ));
     }
 
+    // mklink is a cmd builtin, so both paths pass through cmd's parser.
+    if !crate::ops::is_cmd_safe_path(&link) || !crate::ops::is_cmd_safe_path(target) {
+        return Err("project path contains characters cmd cannot pass safely (& | < > ^ % ! \")".into());
+    }
     let status = crate::ops::cmd("cmd")
         .arg("/c").arg("mklink").arg("/J")
         .arg(&link)

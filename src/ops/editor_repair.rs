@@ -68,23 +68,18 @@ pub fn find_selector() -> Option<PathBuf> {
     }
     if let Ok(k) =
         RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\EpicGames\\EpicGamesLauncher")
-    {
-        if let Ok(root) = k.get_value::<String, _>("AppDataPath") {
+        && let Ok(root) = k.get_value::<String, _>("AppDataPath") {
             candidates
                 .push(PathBuf::from(root).join("Engine/Binaries/Win64/UnrealVersionSelector.exe"));
         }
-    }
     // An existing registered selector can live outside the default folders.
     for class in ["Unreal.ProjectFile", CLASS] {
         if let Ok(k) =
             RegKey::predef(HKEY_CLASSES_ROOT).open_subkey(format!("{class}\\shell\\open\\command"))
-        {
-            if let Ok(command) = k.get_value::<String, _>("") {
-                if let Some(path) = command_executable(&command) {
+            && let Ok(command) = k.get_value::<String, _>("")
+                && let Some(path) = command_executable(&command) {
                     candidates.push(path);
                 }
-            }
-        }
     }
     candidates.into_iter().find(|p| valid_selector(p))
 }

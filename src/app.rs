@@ -41,6 +41,9 @@ const INTRO_FADE_SECS: f32 = 0.45;
 
 // ── Application state ─────────────────────────────────────────────────────────
 
+/// A finished doctor run: generation, project, target and its findings.
+type DoctorResult = (u64, PathBuf, BuildTarget, Vec<crate::ops::preflight::CheckItem>);
+
 pub struct DevToolApp {
     pub close_behavior: crate::config::CloseBehavior,
     pub remember_close: bool,
@@ -191,7 +194,7 @@ pub struct DevToolApp {
     pub schedule_input: String,
     /// Result of `ops::doctor::check_project`, refreshed on the slow poll.
     pub doctor_items: Vec<crate::ops::preflight::CheckItem>,
-    pub doctor_pending: Arc<Mutex<Option<(u64, PathBuf, BuildTarget, Vec<crate::ops::preflight::CheckItem>)>>>,
+    pub doctor_pending: Arc<Mutex<Option<DoctorResult>>>,
     pub doctor_context: Option<(PathBuf, BuildTarget)>,
     pub doctor_scanning: bool,
     pub doctor_generation: u64,

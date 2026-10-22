@@ -15,7 +15,7 @@ impl DevToolApp {
         let can_go = self.upload_use_local || self.upload_use_gdrive;
 
         card()
-            .stroke(egui::Stroke::new(1.0, acc(110)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(110)))
             .show(ui, |ui| {
                 ui.label(heading("Upload / Copy Packaged Build", 15.0));
                 ui.add_space(6.0);
@@ -256,7 +256,7 @@ impl DevToolApp {
         let display = path.to_string_lossy().to_string();
 
         card()
-            .stroke(egui::Stroke::new(1.0, acc(110)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(110)))
             .show(ui, |ui| {
                 ui.label(heading("Packaging complete!", 15.0));
                 ui.add_space(6.0);
@@ -286,7 +286,7 @@ impl DevToolApp {
     /// instead of leaving the user with only an error string to puzzle over.
     pub fn show_upload_fallback_panel(&mut self, ui: &mut egui::Ui) {
         card()
-            .stroke(egui::Stroke::new(1.0, tint(AMBER, 110)))
+            .stroke(egui::Stroke::new(1.0_f32, tint(AMBER, 110)))
             .show(ui, |ui| {
                 ui.colored_label(AMBER, "Google Drive upload failed");
                 ui.add_space(6.0);

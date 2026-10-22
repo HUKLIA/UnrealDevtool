@@ -67,6 +67,7 @@ fn sha256_file(path: &Path) -> std::io::Result<(String, u64)> {
     Ok((format!("{:x}", hash.finalize()), bytes))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_handoff(
     project_name: &str,
     version: &str,
@@ -94,7 +95,7 @@ visuals, audio, gameplay, or performance.\n\n\
 }
 
 fn markdown_escape(value: &str) -> String {
-    value.replace('\r', " ").replace('\n', " ")
+    value.replace(['\r', '\n'], " ")
         .replace('|', "\\|").replace('*', "\\*").replace('_', "\\_")
         .replace('[', "\\[").replace(']', "\\]").replace('`', "\\`")
 }

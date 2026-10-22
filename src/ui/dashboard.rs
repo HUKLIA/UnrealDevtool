@@ -228,22 +228,20 @@ impl DevToolApp {
                     );
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
-                        if ui.add_enabled(self.log_import.is_none(), egui::Button::new("Open log...")).clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter("Logs", &["log", "txt"]).pick_file() {
+                        if ui.add_enabled(self.log_import.is_none(), egui::Button::new("Open log...")).clicked()
+                            && let Some(path) = rfd::FileDialog::new().add_filter("Logs", &["log", "txt"]).pick_file() {
                                 self.import_log(path, ui.ctx().clone());
                             }
-                        }
                         if ui.button("Copy report").on_hover_text("Includes matched lines and possibly private paths. Review before sharing.").clicked() {
                             ui.ctx().copy_text(self.pasted_log_report());
                         }
-                        if ui.button("Save report...").clicked() {
-                            if let Some(path) = rfd::FileDialog::new().set_file_name("diagnostic-report.txt").save_file() {
+                        if ui.button("Save report...").clicked()
+                            && let Some(path) = rfd::FileDialog::new().set_file_name("diagnostic-report.txt").save_file() {
                                 self.status_display = match std::fs::write(&path, self.pasted_log_report()) {
                                     Ok(()) => format!("Report saved to {}", path.display()),
                                     Err(e) => format!("Could not save report: {e}"),
                                 };
                             }
-                        }
                         let can_scan = !self.pasted_log_input.trim().is_empty();
                         ui.add_enabled_ui(can_scan, |ui| {
                             if ui.add_sized([120.0, 28.0], primary("Analyze")).clicked() {

@@ -225,7 +225,7 @@ impl DevToolApp {
                         painter.rect_filled(rect, egui::Rounding::ZERO, dim);
                     }
                 }
-                painter.rect_stroke(t, egui::Rounding::same(9.0), egui::Stroke::new(2.0, accent()));
+                painter.rect_stroke(t, egui::Rounding::same(9.0), egui::Stroke::new(2.0_f32, accent()));
             }
             _ => {
                 painter.rect_filled(screen, egui::Rounding::ZERO, dim);
@@ -307,7 +307,7 @@ impl DevToolApp {
 
         // The edge is drawn in the parent so it cannot be affected by the
         // child layout or by text wrapping differently at another DPI scale.
-        ui.painter().rect_stroke(callout, egui::Rounding::same(14.0), egui::Stroke::new(1.0, accent()));
+        ui.painter().rect_stroke(callout, egui::Rounding::same(14.0), egui::Stroke::new(1.0_f32, accent()));
 
         if close {
             self.close_guide();
@@ -381,7 +381,7 @@ fn draw_guide_arrow(
     // the line never runs underneath either box.
     let start = edge_point(callout, dir);
     let end = edge_point(target, -dir);
-    painter.line_segment([start, end], egui::Stroke::new(2.0, color));
+    painter.line_segment([start, end], egui::Stroke::new(2.0_f32, color));
 
     let head = 9.0;
     let perp = egui::vec2(-dir.y, dir.x);

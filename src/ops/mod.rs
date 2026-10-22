@@ -38,14 +38,22 @@ pub fn cmd(program: &str) -> Command {
     c
 }
 
-/// Creates a command that invokes a Windows batch file and preserves paths
-/// containing spaces. `call` is important here: without it, `cmd /c` can
-/// parse a quoted batch-file path as the whole command and drop the remaining
-/// arguments on some Windows versions.
+/// Creates a command that invokes a Windows batch file (Build.bat, RunUAT.bat).
+///
+/// The script is spawned directly rather than through `cmd /c call`. Only a
+/// direct spawn gets the standard library's batch-file argument escaping
+/// (the CVE-2024-24576 fix), which quotes cmd metacharacters such as `&` in a
+/// project path and refuses to spawn when an argument cannot be made safe.
+/// Wrapping it in `cmd /c` bypassed that and let cmd re-parse every argument.
 pub fn batch_cmd(script: &Path) -> Command {
-    let mut command = cmd("cmd");
-    command.args(["/d", "/c", "call"]).arg(script);
-    command
+    cmd(&script.to_string_lossy())
+}
+
+/// True if `path` contains nothing cmd.exe would reinterpret. Used for the
+/// few places that must still go through cmd's own builtins (`mklink`).
+pub fn is_cmd_safe_path(path: &Path) -> bool {
+    !path.to_string_lossy().chars().any(|c| c.is_control()
+        || matches!(c, '&' | '|' | '<' | '>' | '^' | '"' | '%' | '!' | '`'))
 }
 
 /// Opens `url` in the user's default browser via the OS URI handler.
@@ -89,5 +97,18 @@ mod url_tests {
         assert!(!is_safe_url("C:\\evil.bat"));
         assert!(!is_safe_url("https://x.com/%PATH%"));
         assert!(is_safe_url("https://x.com/a%20b"));
+    }
+
+    #[test]
+    fn batch_arguments_cannot_run_extra_commands() {
+        let dir = std::env::temp_dir().join(format!("devtool-batch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bat = dir.join("fake build.bat");
+        std::fs::write(&bat, "@echo off\r\necho %1\r\n").unwrap();
+        let marker = dir.join("pwned.txt");
+        let payload = format!("-Project=a&echo x>\"{}\"", marker.display());
+        let _ = super::batch_cmd(&bat).arg(&payload).current_dir(&dir).output();
+        assert!(!marker.exists(), "cmd ran a command smuggled in a batch argument");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

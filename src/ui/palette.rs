@@ -238,7 +238,7 @@ impl DevToolApp {
                     egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, screen.max.y - 24.0))));
                 egui::Frame::none()
                     .fill(egui::Color32::from_rgb(10, 20, 30))
-                    .stroke(egui::Stroke::new(1.0, acc(90)))
+                    .stroke(egui::Stroke::new(1.0_f32, acc(90)))
                     .rounding(egui::Rounding::same(R_SECTION))
                     .inner_margin(egui::Margin::same(14.0))
                     .show(&mut card_ui, |ui| {

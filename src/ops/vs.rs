@@ -222,7 +222,7 @@ pub fn scan_for_rider(base: &Path) -> Option<PathBuf> {
 }
 
 pub fn shell_open(path: &Path) {
-    let _ = crate::ops::cmd("cmd")
-        .args(["/c", "start", "", &path.to_string_lossy()])
-        .spawn();
+    // explorer opens a file with its default handler without cmd parsing
+    // the path, so a folder name containing `&` cannot run anything.
+    let _ = crate::ops::cmd("explorer").arg(path).spawn();
 }

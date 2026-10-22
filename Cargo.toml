@@ -2,6 +2,7 @@
 name = "unreal_devtool"
 version = "1.0.1"
 edition = "2024"
+rust-version = "1.89"                            # CVE-2024-24576 batch-arg escaping, CVE-2025-11233
 
 [dependencies]
 eframe  = "0.29"                                 # GUI framework

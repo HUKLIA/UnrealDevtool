@@ -45,7 +45,7 @@ impl DevToolApp {
                     let thumb_max = 96.0;
                     egui::Frame::none()
                         .fill(surface_deep())
-                        .stroke(egui::Stroke::new(1.0, accent()))
+                        .stroke(egui::Stroke::new(1.0_f32, accent()))
                         .rounding(egui::Rounding::same(6.0))
                         .inner_margin(egui::Margin::same(4.0))
                         .show(ui, |ui| {

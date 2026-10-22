@@ -243,7 +243,7 @@ impl DevToolApp {
         };
         deep()
             .inner_margin(egui::Margin::ZERO)
-            .stroke(egui::Stroke::new(1.0, acc(56)))
+            .stroke(egui::Stroke::new(1.0_f32, acc(56)))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 let w = ui.available_width();
