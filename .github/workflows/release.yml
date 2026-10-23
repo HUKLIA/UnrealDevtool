@@ -85,6 +85,9 @@ jobs:
           $ver = "${{ steps.version.outputs.version }}"
           (Get-Content Cargo.toml) -replace '^version\s*=\s*"[^"]+"', "version = `"$ver`"" | Set-Content Cargo.toml
           echo "Cargo.toml version set to $ver for this build"
+          # The lock file records our own package version too; refresh just
+          # that entry so the --locked build below still accepts it.
+          cargo update --workspace
 
       - name: Build release
         run: cargo build --release --locked --target x86_64-pc-windows-msvc

@@ -26,6 +26,7 @@ use crate::theme::*;
 use crate::types::{GitAction, GitState, GitTaskStatus, RunState, UploadAction};
 
 /// How often to re-check GitHub for a new release while the app is open.
+const SPONSOR_URL: &str = "https://github.com/sponsors/NickTAM1";
 const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 impl eframe::App for DevToolApp {
@@ -70,11 +71,18 @@ impl eframe::App for DevToolApp {
             .frame(egui::Frame::none().fill(topbar_background())
                 .inner_margin(egui::Margin::symmetric(GUTTER, 0.0)))
             .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    dot(ui, if self.status_display.contains("[ERROR") { RED } else { accent() }, 6.0);
-                    ui.add(egui::Label::new(egui::RichText::new(&self.status_display).font(mono(11.0)).color(SOFT)).truncate())
-                        .on_hover_text(&self.status_display);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::new(egui::RichText::new("\u{2665} Sponsor").font(body(11.5)).color(accent()))
+                        .frame(false))
+                        .on_hover_text("Support development on GitHub Sponsors")
+                        .clicked() {
+                        crate::ops::open_url(SPONSOR_URL);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        dot(ui, if self.status_display.contains("[ERROR") { RED } else { accent() }, 6.0);
+                        ui.add(egui::Label::new(egui::RichText::new(&self.status_display).font(mono(11.0)).color(SOFT)).truncate())
+                            .on_hover_text(&self.status_display);
+                    });
                 });
             });
 
